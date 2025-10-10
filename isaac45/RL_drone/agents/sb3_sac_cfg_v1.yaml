@@ -39,8 +39,6 @@ policy_kwargs: "dict(
 # if you use VecNormalize via flags in your script:
 normalize_input: true
 normalize_value: true
-                  
-device: 'cuda:0'
 
 buffer_size: 50000  # Replay buffer size for SAC
 learning_starts: 10000  # Number of steps before training starts

@@ -28,7 +28,7 @@ sys.argv = [sys.argv[0]] + hydra_args
 # Launch Isaac Sim
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
-
+sys.argv = [sys.argv[0]] + [arg for arg in hydra_args if not arg.startswith("--/")]
 # at the top with other imports
 import time
 from tqdm.auto import tqdm

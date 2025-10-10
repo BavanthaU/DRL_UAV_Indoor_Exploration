@@ -1,0 +1,5 @@
+GPU_ID=1 ./docker/container.py start base --suffix gpu1
+./docker/container.py enter base --suffix gpu1
+
+./isaaclab.sh -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py     --enable_cameras --num_envs 16 --headless --task Drone_SAC_no_IL_V1 
+
