@@ -1,0 +1,50 @@
+# Ignore Python cache and compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore virtual environments
+venv/
+.env/
+.venv/
+
+# Ignore temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore VSCode and PyCharm project settings
+.vscode/
+.idea/
+
+# Ignore build outputs
+build/
+dist/
+*.egg-info/
+
+# Ignore test coverage reports
+htmlcov/
+.coverage
+*.cover
+*.py,cover
+.cache/
+nosetests.xml
+coverage.xml
+*.prof
+
+# Ignore ROS and simulation cache
+log/
+*.bag
+*.bag.active
+*.pcd
+*.ply
+
+# Models / checkpoints / trajectories
+*.pth
+*.pt
+*.onnx
+*.h5

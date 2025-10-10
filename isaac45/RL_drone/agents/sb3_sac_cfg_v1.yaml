@@ -1,0 +1,50 @@
+# Configuration file for SAC with no IL
+seed: 42 # Random seed for reproducibility
+n_timesteps: !!float 2.048e7  # Total training timesteps 
+
+policy: 'MultiInputPolicy'  # MultiInputPolicy for dict obs
+learning_rate: !!float 1.0e-4  # Learning rate 3e-4
+batch_size: 256  # Larger batch size improves stability, but increases GPU memory usage
+gamma: 0.99  # Discount factor 
+tau: 0.005  # Target smoothing coefficient for soft updates 
+
+ent_coef: '0.2'  # Auto-tuning the entropy coefficient
+
+train_freq: 1  # Frequency of training updates, usually 1 for SAC
+target_update_interval: 1  # Frequency of target Q-network updates
+
+# Policy keyword arguments
+#   log_std_init=0 : Initial log standard deviation of Gaussian policy
+#   activation_fn=nn.ELU : Nonlinear activation (ELU avoids dead neurons vs ReLU)
+#   net_arch=[256, 128] : Actor-critic network sizes
+#   features_extractor_class: Custom feature extractor
+
+policy_kwargs: "dict(
+  log_std_init=-0.5,
+  activation_fn=nn.ELU,
+  net_arch=dict(pi=[256,128], qf=[256,256]),
+  features_extractor_class='BaselineEgoMapAndLinesExtractor',
+  features_extractor_kwargs=dict(
+    image_out=128,
+    line_out=64,
+    features_dim=128,
+    ego_base_channels=64,
+    ego_stages=(2,2,3),
+    ego_use_se=True,
+    ego_use_aspp=True
+  ),
+  share_features_extractor=True)"
+
+
+# if you use VecNormalize via flags in your script:
+normalize_input: true
+normalize_value: true
+                  
+device: 'cuda:0'
+
+buffer_size: 50000  # Replay buffer size for SAC
+learning_starts: 10000  # Number of steps before training starts
+
+
+
+
