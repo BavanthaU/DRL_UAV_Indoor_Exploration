@@ -120,35 +120,44 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     # agent = SAC(policy_arch, env, verbose=1, **agent_cfg)
     
     if args_cli.val_IL:
-        # Load in Behavior Cloning model
         checkpoint_path = args_cli.checkpoint
         bc_model = torch.load(checkpoint_path, map_location="cpu")
-        state_dict = bc_model["state_dict"]
-        
-        # Rename extractor keys (different between IL and RL agents)
-        extractor_state_dict = {
-            key.replace("feature_extractor.extractors.",""): value
-            for key, value in state_dict.items()
-            if key.startswith("feature_extractor.extractors.")}
-    
-        # Transfer pretrained weights into SAC policy
+        state_dict = bc_model["state_dict"] if isinstance(bc_model, dict) and "state_dict" in bc_model else bc_model
+
+        feature_prefix = "feature_extractor."
+        feature_extractor_state = {}
+        for key, value in state_dict.items():
+            if key.startswith(feature_prefix):
+                stripped_key = key[len(feature_prefix):]
+                if stripped_key.startswith("extractors."):
+                    stripped_key = stripped_key.replace("extractors.", "", 1)
+                feature_extractor_state[stripped_key] = value
+
         with torch.no_grad():
-            # Transfer feature extractor weights
-            agent.policy.actor.features_extractor.extractors.load_state_dict(extractor_state_dict)
-            
-            # First hidden layer (input → first hidden layer)
-            agent.policy.actor.latent_pi[0].weight.copy_(bc_model["state_dict"]["actor_fc.0.weight"])
-            agent.policy.actor.latent_pi[0].bias.copy_(bc_model["state_dict"]["actor_fc.0.bias"])
-      
-            # Second hidden layer (first hidden → second hidden layer)
-            agent.policy.actor.latent_pi[2].weight.copy_(bc_model["state_dict"]["actor_fc.3.weight"])
-            agent.policy.actor.latent_pi[2].bias.copy_(bc_model["state_dict"]["actor_fc.3.bias"])
-      
-            # Output layers
-            agent.policy.actor.mu.weight.copy_(bc_model["state_dict"]["actor_head.weight"])
-            agent.policy.actor.mu.bias.copy_(bc_model["state_dict"]["actor_head.bias"])
-            agent.policy.actor.log_std.weight.copy_(bc_model["state_dict"]["log_std.weight"])
-            agent.policy.actor.log_std.bias.copy_(bc_model["state_dict"]["log_std.bias"])
+            feature_extractor = agent.policy.actor.features_extractor
+            if feature_extractor_state:
+                missing_keys, unexpected_keys = feature_extractor.load_state_dict(feature_extractor_state, strict=False)
+                if missing_keys:
+                    print(f"[WARN] Missing IL feature weights for keys: {missing_keys}")
+                if unexpected_keys:
+                    print(f"[WARN] Unexpected IL feature weights ignored: {unexpected_keys}")
+            else:
+                print("[WARN] No feature extractor weights found in IL checkpoint.")
+
+            def _copy_param(target, key: str) -> None:
+                if key in state_dict:
+                    target.copy_(state_dict[key])
+                else:
+                    print(f"[WARN] IL checkpoint missing '{key}'; skipped transfer.")
+
+            _copy_param(agent.policy.actor.latent_pi[0].weight, "actor_fc.0.weight")
+            _copy_param(agent.policy.actor.latent_pi[0].bias, "actor_fc.0.bias")
+            _copy_param(agent.policy.actor.latent_pi[2].weight, "actor_fc.3.weight")
+            _copy_param(agent.policy.actor.latent_pi[2].bias, "actor_fc.3.bias")
+            _copy_param(agent.policy.actor.mu.weight, "actor_head.weight")
+            _copy_param(agent.policy.actor.mu.bias, "actor_head.bias")
+            _copy_param(agent.policy.actor.log_std.weight, "log_std.weight")
+            _copy_param(agent.policy.actor.log_std.bias, "log_std.bias")
     elif not args_cli.val_IL:
         # Load in trained RL model, SAC or IL+SAC
         checkpoint_path = args_cli.checkpoint

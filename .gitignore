@@ -48,3 +48,6 @@ log/
 *.pt
 *.onnx
 *.h5
+
+#logs 
+wandb/

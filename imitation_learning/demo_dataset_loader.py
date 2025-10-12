@@ -11,7 +11,7 @@ class DemoDatasetLoader(Dataset):
     """
     Custom Dataset for loading Isaac simulation data from HDF5 files.
     """
-    def __init__(self, root_dir="DRL_UAV_Indoor_Exploration/trained_model_and_trajectories/expert_trajectories", seq_len=400):
+    def __init__(self, root_dir="../trained_model_and_trajectories/expert_trajectories", seq_len=400):
         self.root_dir = root_dir
         self.seq_len = seq_len
 
@@ -24,6 +24,13 @@ class DemoDatasetLoader(Dataset):
         # Get all HDF5 files
         self.h5_dir = root_dir
         self.h5_files = [f for f in os.listdir(self.h5_dir) if f.endswith(".h5")]
+        # # 🔹 Print length of each trajectory
+        # print("\nTrajectory lengths:")
+        # for f_name in self.h5_files:
+        #     f_path = os.path.join(self.h5_dir, f_name)
+        #     with h5py.File(f_path, "r") as f:
+        #         traj_len = len(f["map_obs"])
+        #         print(f"  {f_name}: {traj_len} steps")
 
     def __len__(self):
         return len(self.demo_folders)

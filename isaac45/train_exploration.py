@@ -58,7 +58,7 @@ class TqdmCallback(BaseCallback):
             self.pbar.update(delta)
             # ETA
             done = cur - self.start
-            elapsed = time.time() - self._t0
+            elapsed = time.time() - self._t0 # type: ignore
             rate = done / max(elapsed, 1e-6)  # steps/sec
             remain = max(0, self.total_target - cur)
             eta_s = remain / max(rate, 1e-6)
@@ -197,67 +197,81 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
 
     # Optionally load IL weights into SAC agent
     if args_cli.use_IL:
-      checkpoint_path = args_cli.IL_model_path
-      bc_model = torch.load(checkpoint_path, map_location="cpu")
-      state_dict = bc_model["state_dict"]
-  
-  
-      # Rename extractor keys (different between IL and RL agents)
-      extractor_state_dict = {
-          key.replace("feature_extractor.extractors.",""): value
-          for key, value in state_dict.items()
-          if key.startswith("feature_extractor.extractors.")}
+        checkpoint_path = args_cli.IL_model_path
+        bc_model = torch.load(checkpoint_path, map_location="cpu")
+        state_dict = bc_model["state_dict"] if isinstance(bc_model, dict) and "state_dict" in bc_model else bc_model
 
-     # Transfer pretrained weights into SAC policy
-      with torch.no_grad():
-          # Transfer feature extractor weights
-          agent.policy.actor.features_extractor.extractors.load_state_dict(extractor_state_dict)
-        
-          # First hidden layer (input → first hidden layer)
-          agent.policy.actor.latent_pi[0].weight.copy_(bc_model["state_dict"]["actor_fc.0.weight"])
-          agent.policy.actor.latent_pi[0].bias.copy_(bc_model["state_dict"]["actor_fc.0.bias"])
-  
-          # Second hidden layer (first hidden → second hidden layer)
-          agent.policy.actor.latent_pi[2].weight.copy_(bc_model["state_dict"]["actor_fc.3.weight"])
-          agent.policy.actor.latent_pi[2].bias.copy_(bc_model["state_dict"]["actor_fc.3.bias"])
-  
-          # Output layers
-          agent.policy.actor.mu.weight.copy_(bc_model["state_dict"]["actor_head.weight"])
-          agent.policy.actor.mu.bias.copy_(bc_model["state_dict"]["actor_head.bias"])
-          agent.policy.actor.log_std.weight.copy_(bc_model["state_dict"]["log_std.weight"])
-          agent.policy.actor.log_std.bias.copy_(bc_model["state_dict"]["log_std.bias"])
+        # Gather feature-extractor weights (old checkpoints used "extractors.", newer use "image_extractors"/"line_extractors")
+        feature_prefix = "feature_extractor."
+        feature_extractor_state = {}
+        for key, value in state_dict.items():
+            if key.startswith(feature_prefix):
+                stripped_key = key[len(feature_prefix):]
+                if stripped_key.startswith("extractors."):
+                    stripped_key = stripped_key.replace("extractors.", "", 1)
+                feature_extractor_state[stripped_key] = value
 
+        with torch.no_grad():
+            feature_extractor = agent.policy.actor.features_extractor
+            if feature_extractor_state:
+                missing_keys, unexpected_keys = feature_extractor.load_state_dict(feature_extractor_state, strict=False)
+                if missing_keys:
+                    print(f"[WARN] Missing IL feature weights for keys: {missing_keys}")
+                if unexpected_keys:
+                    print(f"[WARN] Unexpected IL feature weights ignored: {unexpected_keys}")
+            else:
+                print("[WARN] No feature extractor weights found in IL checkpoint.")
 
-      # Optionally fill replay buffer
-      if args_cli.fill_replay_buffer:
-        obs = env.reset()
-        n_prefill_steps = 10000  # Set to a reasonable number of steps for warm-up
-    
-        for iter in range(n_prefill_steps):
-            # Sample action using the pretrained IL policy
-            action, _states = agent.predict(obs, deterministic=True)
-    
-            # Step environment
-            next_obs, reward, done, info = env.step(action)
-    
-            done_env_ids = [i for i, d in enumerate(done) if d]
-    
-            # Reset only the done environments
-            if done_env_ids:
-                reset_obs, _ = env.unwrapped.reset(env_ids=torch.tensor(done_env_ids, dtype=torch.int64, device=env.unwrapped.device))
-    
-            # Store transition in replay buffer
-            agent.replay_buffer.add(obs, next_obs, action, reward, done, info)
-    
-            # Move to next observation
-            obs = next_obs
-            print(f"Prefill step {iter}/{n_prefill_steps}")
-        agent.save_replay_buffer("logs/sb3/replay_buffer_widelens.pkl")
-        print("[INFO] Replay buffer prefilled.")
-          
-      # Otherwise, load existing replay buffer from disk
-      else: 
-        agent.load_replay_buffer(args_cli.buffer_path)
+            def _copy_param(target, key: str) -> None:
+                if key in state_dict:
+                    target.copy_(state_dict[key])
+                else:
+                    print(f"[WARN] IL checkpoint missing '{key}'; skipped transfer.")
+
+            # First hidden layer (input → first hidden layer)
+            _copy_param(agent.policy.actor.latent_pi[0].weight, "actor_fc.0.weight")
+            _copy_param(agent.policy.actor.latent_pi[0].bias, "actor_fc.0.bias")
+
+            # Second hidden layer (first hidden → second hidden layer)
+            _copy_param(agent.policy.actor.latent_pi[2].weight, "actor_fc.3.weight")
+            _copy_param(agent.policy.actor.latent_pi[2].bias, "actor_fc.3.bias")
+
+            # Output layers
+            _copy_param(agent.policy.actor.mu.weight, "actor_head.weight")
+            _copy_param(agent.policy.actor.mu.bias, "actor_head.bias")
+            _copy_param(agent.policy.actor.log_std.weight, "log_std.weight")
+            _copy_param(agent.policy.actor.log_std.bias, "log_std.bias")
+
+        # Optionally fill replay buffer
+        if args_cli.fill_replay_buffer:
+            obs = env.reset()
+            n_prefill_steps = 10000  # Set to a reasonable number of steps for warm-up
+
+            for iter in range(n_prefill_steps):
+                # Sample action using the pretrained IL policy
+                action, _states = agent.predict(obs, deterministic=True)
+
+                # Step environment
+                next_obs, reward, done, info = env.step(action)
+
+                done_env_ids = [i for i, d in enumerate(done) if d]
+
+                # Reset only the done environments
+                if done_env_ids:
+                    reset_obs, _ = env.unwrapped.reset(env_ids=torch.tensor(done_env_ids, dtype=torch.int64, device=env.unwrapped.device))
+
+                # Store transition in replay buffer
+                agent.replay_buffer.add(obs, next_obs, action, reward, done, info)
+
+                # Move to next observation
+                obs = next_obs
+                print(f"Prefill step {iter}/{n_prefill_steps}")
+            agent.save_replay_buffer("logs/sb3/replay_buffer_widelens.pkl")
+            print("[INFO] Replay buffer prefilled.")
+
+        # Otherwise, load existing replay buffer from disk
+        elif args_cli.buffer_path:
+            agent.load_replay_buffer(args_cli.buffer_path)
 
   
     # Option to load agent from checkpoint: 

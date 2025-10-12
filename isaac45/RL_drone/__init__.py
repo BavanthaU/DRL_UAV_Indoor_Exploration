@@ -21,6 +21,17 @@ gym.register(
     },
 )
 
+# Training registers
+gym.register(
+    id="Drone_SAC_IL_V1",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": env_config_training.DroneEnvCfg,
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_sac_IL_v1.yaml", 
+    },
+)
+
 gym.register(
     id="Drone_SAC_no_IL",
     entry_point="isaaclab.envs:ManagerBasedRLEnv",

@@ -17,7 +17,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.sac_net import SACNet
+# from model.sac_net import SACNet
+from model.baseline_conv_sac import ILSACBaseline
 
 import torch.distributions as D
 
@@ -121,10 +122,30 @@ def main():
     })
     
     # Instantiate the SAC model with action dimension=2 and the observation space defined above
-    net_model = SACNet(act_dim=2, observation_space=observation_space,
-                              device=args.device,
-                              fix_cnn=False)
-               
+    # net_model = SACNet(act_dim=2, observation_space=observation_space,
+    #                           device=args.device,
+    #                           fix_cnn=False)
+    
+    net_model = ILSACBaseline(observation_space=observation_space,
+                            act_dim=2,
+                            device=args.device,
+                            activation_fn=nn.ELU,
+                            log_std_init=-0.5,
+                            net_arch=dict(pi=[256,128], qf=[256,256]),
+                            features_extractor_kwargs=dict(
+                                image_out=128,
+                                line_out=64,
+                                features_dim=128,
+                                ego_base_channels=64,
+                                ego_stages=(2,2,3),
+                                ego_use_se=True,
+                                ego_use_aspp=True,
+                                # 👇 only include the keys you actually feed in observations
+                                ordered_keys=('map_obs','oneline_depth','oneline_sems'),
+                            ),
+                            action_low=[0.0, -1.0],
+                            action_high=[1.0, 1.0],
+                        )
     net_model.to(args.device)
     
     # Initialize iteration and step variable for saving to tensorboard
@@ -142,11 +163,15 @@ def main():
     # Good for continuous actions since small difference is not punished as harsly as with MSE lsos
     loss_criterion = nn.SmoothL1Loss().to(args.device)
 
+    print("data loading....")
+
     # Load demonstration dataset
     train_dataset = DemoDatasetLoader(root_dir=args.demo_dir,
                                            seq_len=args.traj_len)
     train_dataloader = DataLoader(train_dataset, batch_size=1,
-                                  shuffle=False, num_workers=0, drop_last=False)
+                                  shuffle=False, num_workers=16, drop_last=False)
+    
+    print("data loaded!")
 
     for iter in tqdm(range(global_iter, args.max_iters), desc='iter'):
         global_iter = iter
@@ -156,9 +181,9 @@ def main():
 
             # Extract episode data, squeeze batch dimension if needed
             ep_occ_maps = occ_map.float().squeeze(0)
-            ep_sems = sems.float().squeeze(0)
-            ep_linear_velocities = linear_velocities
-            ep_angular_velocities = angular_velocities
+            # ep_sems = sems.float().squeeze(0)
+            # ep_linear_velocities = linear_velocities
+            # ep_angular_velocities = angular_velocities
             ep_oneline_depth = oneline_depth
             ep_oneline_sems = oneline_sems
             ep_expert_actions = expert_actions
@@ -171,9 +196,9 @@ def main():
 
                 # Slice the batch segment for each input and move to device
                 it_occ_map = ep_occ_maps[start: end].to(args.device).float()
-                it_sems = ep_sems[start: end].to(args.device).float()
-                it_linear_velocities = ep_linear_velocities[:,start: end].to(args.device).squeeze(0).float()
-                it_angular_velocities = ep_angular_velocities[:,start: end].to(args.device).squeeze(0).float()
+                # it_sems = ep_sems[start: end].to(args.device).float()
+                # it_linear_velocities = ep_linear_velocities[:,start: end].to(args.device).squeeze(0).float()
+                # it_angular_velocities = ep_angular_velocities[:,start: end].to(args.device).squeeze(0).float()
                 it_oneline_depth = ep_oneline_depth[:,start: end].to(args.device).squeeze(0).float()
                 it_oneline_sems = ep_oneline_sems[:,start: end].to(args.device).squeeze(0).float()
                 

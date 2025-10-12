@@ -3,12 +3,12 @@ seed: 42 # Random seed for reproducibility
 n_timesteps: !!float 2.048e7  # Total training timesteps 
 
 policy: 'MultiInputPolicy'  # MultiInputPolicy for dict obs
-learning_rate: !!float 1.0e-4  # Learning rate 3e-4
+learning_rate: !!float 1.0e-5  # Learning rate 3e-4
 batch_size: 256  # Larger batch size improves stability, but increases GPU memory usage
 gamma: 0.99  # Discount factor 
 tau: 0.005  # Target smoothing coefficient for soft updates 
 
-ent_coef: '0.1'  # Auto-tuning the entropy coefficient
+ent_coef: 'auto_0.01'  # Auto-tuning the entropy coefficient
 
 train_freq: 1  # Frequency of training updates, usually 1 for SAC
 target_update_interval: 1  # Frequency of target Q-network updates
@@ -20,7 +20,7 @@ target_update_interval: 1  # Frequency of target Q-network updates
 #   features_extractor_class: Custom feature extractor
 
 policy_kwargs: "dict(
-  log_std_init=-0.5,
+  log_std_init=0,
   activation_fn=nn.ELU,
   net_arch=dict(pi=[256,128], qf=[256,256]),
   features_extractor_class='BaselineEgoMapAndLinesExtractor',
@@ -40,7 +40,7 @@ policy_kwargs: "dict(
 normalize_input: true
 normalize_value: true
 
-buffer_size: 50000  # Replay buffer size for SAC
+buffer_size: 80000  # Replay buffer size for SAC
 learning_starts: 10000  # Number of steps before training starts
 
 
