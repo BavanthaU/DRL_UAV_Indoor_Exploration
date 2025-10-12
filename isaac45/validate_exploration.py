@@ -15,6 +15,8 @@ parser.add_argument("--task", type=str, default="Drone_eval_envA", help="Name of
 parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
 parser.add_argument("--val_IL", action="store_true", default=False, help="Turn this on if only IL will be evaluated")
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
+parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster min distances each step.")
+parser.add_argument("--ray_debug_hits", action="store_true", help="Additionally print raw ray hit points (env 0).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -37,6 +39,7 @@ from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
+from DRL_UAV_Indoor_Exploration.isaac45.mdp.common import ensure_ray_caster_initialized
 
 # Stable-Baselines3 tools
 from stable_baselines3.common.vec_env import VecNormalize
@@ -99,11 +102,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     
     # Create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
+    env.unwrapped.raycast_debug_print = args_cli.ray_debug
+    env.unwrapped.raycast_debug_print_hits = args_cli.ray_debug_hits
+    ensure_ray_caster_initialized(env)
     env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)   
     env.unwrapped.env_map = env_model
     
-    # Wrapper around environment for SB3: actions are forward velocity [0,1] and rotational velocity [-1,1]
-    env = Sb3VecEnvWrapper(env, lower_bound=np.array([0, -1]) , upper_bound=np.array([1, 1]))
+    # Wrapper around environment for SB3: actions are normalized forward/back velocity [-1,1] and yaw rate [-1,1]
+    env = Sb3VecEnvWrapper(env, lower_bound=np.array([-1, -1]), upper_bound=np.array([1, 1]))
 
     # Normalize env
     env = VecNormalize(

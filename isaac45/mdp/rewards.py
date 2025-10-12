@@ -12,6 +12,8 @@ import numpy as np
 from isaaclab.utils.math import wrap_to_pi, quat_from_matrix, quat_rotate_inverse, yaw_quat
 from isaaclab.scene import InteractiveSceneCfg
 
+from .common import get_raycast_planar_min_distance
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 
@@ -131,6 +133,40 @@ def near_collision(env: ManagerBasedRLEnv) -> torch.Tensor:
     total_reward  = torch.where(condition.any(dim=1), -5.0, 0.0) 
 
     return total_reward
+
+
+def raycast_proximity_penalty(
+    env: ManagerBasedRLEnv,
+    near_threshold: float = 1.0,
+    crash_threshold: float = 0.2,
+    near_penalty: float = -0.5,
+    crash_penalty: float = -10.0,
+    vertical_tolerance: float = 1.5,
+) -> torch.Tensor:
+    """
+    Penalize the drone when ray-cast measurements indicate close proximity to obstacles.
+
+    Args:
+        env: Isaac RL environment containing the ray-caster sensor.
+        near_threshold: Distance below which a mild penalty is applied.
+        crash_threshold: Distance below which a severe penalty (crash) is applied.
+        near_penalty: Reward value applied when the nearest obstacle is within ``near_threshold``.
+        crash_penalty: Reward value applied when the nearest obstacle is within ``crash_threshold``.
+        vertical_tolerance: Maximum vertical separation between sensor and hit to consider the ray valid.
+
+    Returns:
+        Tensor of shape ``(num_envs,)`` with the proximity penalties.
+    """
+    distances = get_raycast_planar_min_distance(env, vertical_tolerance=vertical_tolerance)
+    rewards = torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    near_mask = distances < near_threshold
+    rewards[near_mask] = near_penalty
+
+    crash_mask = distances < crash_threshold
+    rewards[crash_mask] = crash_penalty
+
+    return rewards
 
 
 def area_coverage (env: ManagerBasedRLEnv) -> torch.Tensor:

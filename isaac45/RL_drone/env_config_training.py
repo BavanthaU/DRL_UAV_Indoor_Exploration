@@ -9,7 +9,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
-from isaaclab.sensors import CameraCfg, ContactSensorCfg
+from isaaclab.sensors import CameraCfg
 from isaaclab.sensors import RayCasterCfg, patterns
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.envs import ManagerBasedEnv
@@ -75,9 +75,20 @@ class QuadrotorSceneCfg(InteractiveSceneCfg):
         offset=CameraCfg.OffsetCfg(pos=(0.0, 0.0,-0.25), convention="world"),
     )
 
-    # Contact sensor for collision detection
-    contact_forces = ContactSensorCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/.*", update_period=0, history_length=0, debug_vis=True,track_air_time=False,
+    # Ray-cast sensor for obstacle proximity (4 sonar-like beams pointing fore/left/right/aft)
+    ray_caster = RayCasterCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/body",
+        update_period=0.0,
+        mesh_prim_paths=["/World/envs"],
+        max_distance=5.0,
+        attach_yaw_only=False,
+        pattern_cfg=patterns.LidarPatternCfg(
+            channels=1,
+            vertical_fov_range=(0.0, 0.0),
+            horizontal_fov_range=(-180.0, 180.0),
+            horizontal_res=90.0,
+        ),
+        debug_vis=False,
     )
 
 
@@ -148,11 +159,17 @@ class RewardsCfg:
         weight=0.1,
     )
 
-    # Penalty for collision. 
-    collision = RewTerm(
-        func= mdp.rewards.check_collision_single_contact_sensor, 
-        weight=10.0, 
-        params={"M": -10.0, "N": 0.0, "force_threshold": 0.01} # M: Negative reward for crashing. N: positive reward for keeping alive
+    # Penalty for approaching obstacles detected via ray-cast
+    obstacle_proximity = RewTerm(
+        func=mdp.rewards.raycast_proximity_penalty,
+        weight=1.0,
+        params={
+            "near_threshold": 1.0,
+            "crash_threshold": 0.2,
+            "near_penalty": -0.5,
+            "crash_penalty": -10.0,
+            "vertical_tolerance": 1.5,
+        },
     )
     
     # Reward for finishing exploration
@@ -193,10 +210,10 @@ class TerminationCfg:
     # Termination if drone flips upside down along x or y axis (used for non-linear controller)
     drone_flips = DoneTerm(func=mdp.terminations.drone_flips_upsidedown)
 
-    # Termination if drone crashes into wall with force threshold N
+    # Termination if ray-cast detects obstacle closer than threshold
     drone_crashes = DoneTerm(
-        func=mdp.terminations.drone_crashes_single_contact_sensor,
-        params={"force_threshold": 0.01},
+        func=mdp.terminations.drone_crashes_raycast,
+        params={"crash_threshold": 0.2, "vertical_tolerance": 1.5},
     )  
 
 @configclass
@@ -215,9 +232,9 @@ class DroneEnvCfg(ManagerBasedRLEnvCfg):
         # general settings
         self.decimation = 25
         self.episode_length_s = 1000
-        
-        # viewer settings
-        self.viewer.eye = (0.0, 0.0, 8.0)
+        # viewer settings (top-down view to monitor coverage)
+        self.viewer.eye = (0.0, 0.0, 40.0)
+        self.viewer.lookat = (0.0, 0.0, 0.0)
         
         # simulation settings
         self.sim.dt = 0.01

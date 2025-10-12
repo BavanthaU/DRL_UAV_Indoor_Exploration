@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from isaaclab.utils.math import quat_rotate_inverse, yaw_quat
 
+from .common import get_raycast_planar_min_distance
+
 if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedRLEnv
 import numpy as np
@@ -61,6 +63,16 @@ def drone_crashes_single_contact_sensor(env:ManagerBasedRLEnv, force_threshold: 
     #     plt.savefig(filename)
     #     plt.close(fig)
     return result
+
+
+def drone_crashes_raycast(
+    env: ManagerBasedRLEnv,
+    crash_threshold: float = 0.2,
+    vertical_tolerance: float = 1.5,
+) -> torch.Tensor:
+    """Terminate when the ray-cast sensor detects an obstacle closer than ``crash_threshold``."""
+    distances = get_raycast_planar_min_distance(env, vertical_tolerance=vertical_tolerance)
+    return distances < crash_threshold
 
 
 
