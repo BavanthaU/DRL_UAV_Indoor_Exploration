@@ -18,11 +18,16 @@ parser.add_argument("--IL_model_path", type=str, default=None, help="Path to IL.
 parser.add_argument("--fill_replay_buffer", action="store_true", default=False, help="Fill replay buffer with IL trajectories")
 parser.add_argument("--buffer_path", type=str, default=None, help="Path to buffer file..")
 parser.add_argument("--resume", type=str, default=None, help="Path to SB3 .zip checkpoint to resume from")
-parser.add_argument("--wandb_project", type=str, default="isaac-drone-sac", help="W&B project name")
+parser.add_argument("--wandb_project", type=str, default="isaac-drone-higherarchical", help="W&B project name")
 parser.add_argument("--wandb_name", type=str, default=None, help="W&B run name (optional)")
 parser.add_argument("--wandb_mode", type=str, default="online", help="'online'|'offline'|'disabled'")
 parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster min distances each step.")
 parser.add_argument("--ray_debug_hits", action="store_true", help="Additionally print raw ray hit points (env 0).")
+parser.add_argument("--manager_rl", action="store_true", help="Enable RL-based frontier manager.")
+parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maximum frontier candidates considered by the manager.")
+parser.add_argument("--manager_lr", type=float, default=1e-3, help="Learning rate for the frontier manager policy.")
+parser.add_argument("--manager_gamma", type=float, default=0.95, help="Discount factor for frontier manager rewards.")
+parser.add_argument("--manager_epsilon", type=float, default=0.1, help="Epsilon-greedy exploration for the frontier manager.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -74,6 +79,58 @@ class TqdmCallback(BaseCallback):
             self.pbar.update(max(0, self.total_target - self.pbar.n))
             self.pbar.close()
 
+
+class WandbMetricsCallback(BaseCallback):
+    """Periodic logging of custom exploration metrics to Weights & Biases."""
+
+    def __init__(self, env, log_interval: int = 200):
+        super().__init__()
+        self._env = env
+        self._log_interval = max(1, log_interval)
+
+    def _on_step(self) -> bool:
+        if self.num_timesteps % self._log_interval != 0:
+            return True
+
+        env_base = getattr(self._env, "unwrapped", self._env)
+        env_map = getattr(env_base, "env_map", None)
+        metrics: dict[str, float] = {}
+
+        if env_map is not None and hasattr(env_map, "environment_map"):
+            try:
+                coverage = (env_map.environment_map != 0).float().mean(dim=(1, 2))
+                metrics["coverage/mean"] = coverage.mean().item()
+                metrics["coverage/min"] = coverage.min().item()
+                metrics["coverage/max"] = coverage.max().item()
+            except Exception:
+                pass
+
+            if hasattr(env_map, "prev_subgoal_distance") and env_map.prev_subgoal_distance.numel() > 0:
+                metrics["subgoal/distance_mean"] = env_map.prev_subgoal_distance.mean().item()
+                metrics["subgoal/distance_min"] = env_map.prev_subgoal_distance.min().item()
+
+            if hasattr(env_map, "subgoal_reward_accum") and env_map.subgoal_reward_accum.numel() > 0:
+                metrics["subgoal/accum_reward_mean"] = env_map.subgoal_reward_accum.mean().item()
+
+            if hasattr(env_map, "area_diff") and env_map.area_diff.numel() > 0:
+                metrics["coverage/new_cells_mean"] = env_map.area_diff.float().mean().item()
+
+        manager = getattr(env_map, "manager", None) if env_map is not None else None
+        if manager is not None:
+            if hasattr(manager, "epsilon"):
+                metrics["manager/epsilon"] = float(manager.epsilon)
+            if hasattr(manager, "_buffer"):
+                metrics["manager/buffer_size"] = float(len(manager._buffer))
+
+        if metrics:
+            try:
+                import wandb
+
+                wandb.log(metrics, step=self.num_timesteps)
+            except Exception:
+                pass
+        return True
+
 # Import packages to use gymnasium environments
 import gymnasium as gym
 import random
@@ -88,6 +145,7 @@ from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
 from DRL_UAV_Indoor_Exploration.isaac45.mdp.common import ensure_ray_caster_initialized
+from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
 
 # Stable-Baselines3 tools
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -163,9 +221,23 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
 
     # Create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
-    env.unwrapped.raycast_debug_print = args_cli.ray_debug
-    env.unwrapped.raycast_debug_print_hits = args_cli.ray_debug_hits
+    base_env = env.unwrapped
+    base_env.raycast_debug_print = args_cli.ray_debug
+    base_env.raycast_debug_print_hits = args_cli.ray_debug_hits
     ensure_ray_caster_initialized(env)
+
+    frontier_manager = None
+    if args_cli.manager_rl and hasattr(base_env, "env_map"):
+        device = getattr(base_env, "device", getattr(base_env.sim, "device", "cpu"))
+        frontier_manager = FrontierRLManager(
+            device=device,
+            max_candidates=args_cli.manager_max_candidates,
+            lr=args_cli.manager_lr,
+            gamma=args_cli.manager_gamma,
+            epsilon=args_cli.manager_epsilon,
+            training=True,
+        )
+        base_env.env_map.register_manager(frontier_manager)
     env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)
     env.unwrapped.env_map = env_model
 
@@ -291,7 +363,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     # callbacks
     checkpoint_callback = CheckpointCallback(save_freq=10000, save_path=log_dir, name_prefix="model", verbose=2)
     tqdm_cb = TqdmCallback(total_target=n_timesteps, start=start_timesteps, update_interval=1000)
-    callbacks = CallbackList([checkpoint_callback, tqdm_cb])
+    callback_list = [checkpoint_callback, tqdm_cb]
+    if _wandb:
+        callback_list.append(WandbMetricsCallback(env, log_interval=200))
+    callbacks = CallbackList(callback_list)
 
     # train the agent
     remaining = max(0, int(n_timesteps) - int(start_timesteps))

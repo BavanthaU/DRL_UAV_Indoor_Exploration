@@ -17,6 +17,8 @@ parser.add_argument("--val_IL", action="store_true", default=False, help="Turn t
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster min distances each step.")
 parser.add_argument("--ray_debug_hits", action="store_true", help="Additionally print raw ray hit points (env 0).")
+parser.add_argument("--manager_rl", action="store_true", help="Enable RL frontier manager during evaluation (no training).")
+parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maximum frontier candidates considered by the manager during eval.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -40,6 +42,7 @@ from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
 from DRL_UAV_Indoor_Exploration.isaac45.mdp.common import ensure_ray_caster_initialized
+from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
 
 # Stable-Baselines3 tools
 from stable_baselines3.common.vec_env import VecNormalize
@@ -102,9 +105,20 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     
     # Create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
-    env.unwrapped.raycast_debug_print = args_cli.ray_debug
-    env.unwrapped.raycast_debug_print_hits = args_cli.ray_debug_hits
+    base_env = env.unwrapped
+    base_env.raycast_debug_print = args_cli.ray_debug
+    base_env.raycast_debug_print_hits = args_cli.ray_debug_hits
     ensure_ray_caster_initialized(env)
+
+    frontier_manager = None
+    if args_cli.manager_rl and hasattr(base_env, "env_map"):
+        device = getattr(base_env, "device", getattr(base_env.sim, "device", "cpu"))
+        frontier_manager = FrontierRLManager(
+            device=device,
+            max_candidates=args_cli.manager_max_candidates,
+            training=False,
+        )
+        base_env.env_map.register_manager(frontier_manager)
     env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)   
     env.unwrapped.env_map = env_model
     

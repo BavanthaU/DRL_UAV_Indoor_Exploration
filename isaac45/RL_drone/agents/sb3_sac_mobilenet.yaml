@@ -1,0 +1,30 @@
+# SAC configuration using frozen MobileNet feature extractor
+seed: 42
+n_timesteps: !!float 2.048e7
+
+policy: 'MultiInputPolicy'
+learning_rate: !!float 3.0e-4
+batch_size: 256
+gamma: 0.99
+tau: 0.005
+
+ent_coef: 'auto_0.2'
+
+train_freq: 1
+target_update_interval: 1
+
+policy_kwargs: "dict(
+  log_std_init=-0.5,
+  activation_fn=nn.ELU,
+  net_arch=dict(pi=[256,128], qf=[256,256]),
+  features_extractor_class='MobileNetFrozenExtractor',
+  features_extractor_kwargs=dict(
+    image_out=128,
+    vector_out=64,
+    features_dim=128,
+    freeze_backbone=True
+  ),
+  share_features_extractor=True)"
+
+buffer_size: 400000
+learning_starts: 10000

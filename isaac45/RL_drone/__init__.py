@@ -53,6 +53,16 @@ gym.register(
     },
 )
 
+gym.register(
+    id="Drone_SAC_mobilenet",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": env_config_training.DroneEnvCfg,
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_sac_mobilenet.yaml",
+    },
+)
+
 # Evaluation registers
 gym.register(
     id="Drone_eval_envA",

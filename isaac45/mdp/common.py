@@ -54,10 +54,11 @@ def get_raycast_planar_min_distance(
 
 def ensure_ray_caster_initialized(env) -> None:
     """Ensure the ray-cast sensor has run its initialization prior to use."""
-    sensor = getattr(env.scene, "get", None)
+    base_env = getattr(env, "unwrapped", env)
+    sensor = getattr(base_env.scene, "get", None)
     if sensor is None:
         return
-    ray = env.scene.get("ray_caster", None)
+    ray = base_env.scene.get("ray_caster", None)
     if ray is None or ray.is_initialized:
         return
     ray._initialize_impl()

@@ -169,6 +169,46 @@ def raycast_proximity_penalty(
     return rewards
 
 
+def subgoal_progress_reward(
+    env: ManagerBasedRLEnv,
+    progress_weight: float = 0.5,
+    reach_bonus: float = 5.0,
+    tolerance: float = 1.5,
+) -> torch.Tensor:
+    """Reward for moving toward and reaching the current frontier subgoal."""
+    if not hasattr(env, "env_map") or env.env_map is None:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    env_map = env.env_map
+    if not hasattr(env_map, "current_subgoal_world"):
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    active = getattr(env_map, "subgoal_active", torch.zeros(env.num_envs, dtype=torch.bool, device=env.device))
+    if not active.any():
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    robot_pos = env.scene["robot"].data.root_pos_w
+    subgoal = env_map.current_subgoal_world
+    dist = torch.linalg.norm(subgoal[:, :2] - robot_pos[:, :2], dim=1)
+    prev = env_map.prev_subgoal_distance
+    progress = prev - dist
+    reward = progress_weight * progress
+    reached = (dist <= tolerance) & active
+    reward[reached] += reach_bonus
+    reward[~active] = 0.0
+    env_map.prev_subgoal_distance = dist
+    return reward
+
+
+def curiosity_intrinsic_reward(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Intrinsic reward encouraging visitation of novel cells."""
+    if not hasattr(env, "env_map") or env.env_map is None:
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    env_map = env.env_map
+    if not hasattr(env_map, "curiosity_reward"):
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    return env_map.curiosity_reward.detach()
+
+
 def area_coverage (env: ManagerBasedRLEnv) -> torch.Tensor:
     """Positive reward equal to the new map area seen in each step.
         Args:

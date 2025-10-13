@@ -15,6 +15,10 @@ parser.add_argument("--vecnorm_path", type=str, default=None, help="Optional Vec
 parser.add_argument("--fps", type=float, default=30.0, help="Target display FPS for pacing")
 parser.add_argument("--max_steps", type=int, default=20000)
 parser.add_argument("--deterministic", action="store_true", default=True)
+parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster min distances during replay.")
+parser.add_argument("--ray_debug_hits", action="store_true", help="Additionally print raw ray hit points (env 0) during replay.")
+parser.add_argument("--manager_rl", action="store_true", help="Use the RL frontier manager weights during replay (no training).")
+parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maximum frontier candidates passed to the manager in replay mode.")
 parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster min distances each step.")
 parser.add_argument("--ray_debug_hits", action="store_true", help="Additionally print raw ray hit points (env 0).")
 # pass-through common AppLauncher args (device, headless, enable_cameras, etc.)
@@ -51,6 +55,7 @@ from isaaclab_tasks.utils.hydra import hydra_task_config
 import DRL_UAV_Indoor_Exploration.isaac45.RL_drone  # registers custom gym environments
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
 from DRL_UAV_Indoor_Exploration.isaac45.mdp.common import ensure_ray_caster_initialized
+from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
 import DRL_UAV_Indoor_Exploration.isaac45.utils.env_mapping_classes as env_mapping
 from DRL_UAV_Indoor_Exploration.isaac45.utils.sac import SAC
 from stable_baselines3.common.vec_env import VecNormalize
@@ -74,6 +79,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
         env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins
     )
     env.unwrapped.env_map = env_model
+    if args_cli.manager_rl and hasattr(env.unwrapped, "env_map"):
+        device = getattr(env.unwrapped, "device", getattr(env.unwrapped.sim, "device", "cpu"))
+        manager = FrontierRLManager(
+            device=device,
+            max_candidates=args_cli.manager_max_candidates,
+            training=False,
+        )
+        env.unwrapped.env_map.register_manager(manager)
 
     # SB3 wrapper: actions in [-1,1] forward/back and [-1,1] yaw rate
     env = Sb3VecEnvWrapper(env, lower_bound=np.array([-1, -1]), upper_bound=np.array([1, 1]))

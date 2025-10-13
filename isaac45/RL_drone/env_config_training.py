@@ -126,6 +126,7 @@ class ObservationsCfg:
 
         # Semantic Line (middle line of semantic image)
         oneline_sems = ObsTerm(func=mdp.observations.get_oneline_semantic, params={"num_classes": 6})
+        subgoal_vec = ObsTerm(func=mdp.observations.get_subgoal_vector)
         
 
         def __post_init__(self) -> None:
@@ -170,6 +171,15 @@ class RewardsCfg:
             "crash_penalty": -10.0,
             "vertical_tolerance": 1.5,
         },
+    )
+    subgoal_progress = RewTerm(
+        func=mdp.rewards.subgoal_progress_reward,
+        weight=1.0,
+        params={"progress_weight": 0.5, "reach_bonus": 5.0, "tolerance": 1.5},
+    )
+    curiosity = RewTerm(
+        func=mdp.rewards.curiosity_intrinsic_reward,
+        weight=0.1,
     )
     
     # Reward for finishing exploration

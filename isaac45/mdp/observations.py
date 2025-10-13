@@ -191,3 +191,28 @@ def get_oneline_semantic(env: ManagerBasedEnv, num_classes: float) -> torch.Tens
     semantic_image = env.scene["camera"].data.output['semantic_segmentation'].permute(0, 3, 1, 2).float()
     oneline_sem = semantic_image[ :,:, 24, :]
     return oneline_sem
+
+
+def get_subgoal_vector(env: ManagerBasedRLEnv) -> torch.Tensor:
+    """Subgoal in body frame (dx, dy) plus heading error and planar distance."""
+    if not hasattr(env, "env_map") or env.env_map is None:
+        return torch.zeros((env.num_envs, 4), dtype=torch.float32, device=env.device)
+    env_map = env.env_map
+    if not hasattr(env_map, "current_subgoal_world"):
+        return torch.zeros((env.num_envs, 4), dtype=torch.float32, device=env.device)
+
+    subgoal = env_map.current_subgoal_world
+    active = getattr(env_map, "subgoal_active", torch.ones(env.num_envs, dtype=torch.bool, device=env.device))
+    robot_pos = env.scene["robot"].data.root_pos_w
+    vec_world = subgoal - robot_pos
+    robot_quat = env.scene["robot"].data.root_quat_w
+    vec_body = quat_rotate_inverse(robot_quat, vec_world)
+
+    yaw_robot = euler_xyz_from_quat(robot_quat)[2]
+    yaw_target = torch.atan2(vec_world[:, 1], vec_world[:, 0])
+    heading_error = wrap_to_pi(yaw_target - yaw_robot)
+    distance = torch.linalg.norm(vec_world[:, :2], dim=1)
+
+    obs = torch.stack([vec_body[:, 0], vec_body[:, 1], heading_error, distance], dim=1)
+    obs[~active] = 0.0
+    return obs
