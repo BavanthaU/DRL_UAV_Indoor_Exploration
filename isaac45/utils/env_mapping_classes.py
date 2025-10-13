@@ -78,6 +78,11 @@ class BasicEnvironmentModel:
         self.visitation_counts = torch.zeros((self.num_envs, self._grid_num[0], self._grid_num[1]), device=self.device, dtype=torch.float32)
         self.curiosity_reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.curiosity_beta = 0.1
+        self.frontier_snapshot = {i: None for i in range(self.num_envs)}
+        self.manager_mode = "heuristic"
+        self.test_global_planner = False
+        self._test_map_interval = 1000
+        self._last_test_map_step = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
         # For monitoring progress in RL
         self.count = torch.zeros(self.num_envs, dtype=torch.int, device = self.device)
@@ -99,9 +104,10 @@ class BasicEnvironmentModel:
         self.subgoal_reward_accum = torch.zeros(self.num_envs, device=self.device)
         self.subgoal_steps = torch.zeros(self.num_envs, device=self.device)
 
-    def register_manager(self, manager) -> None:
+    def register_manager(self, manager, mode: str = "rl") -> None:
         """Attach a frontier manager that will select subgoals."""
         self.manager = manager
+        self.manager_mode = mode
         if hasattr(manager, "max_candidates"):
             self.manager_max_candidates = int(manager.max_candidates)
 
@@ -185,7 +191,7 @@ class BasicEnvironmentModel:
             
             u = torch.arange(0, self._height, device = self.device)                                                                           
             v = torch.arange(0, self._width, device = self.device)                                                                           
-            img_pixs = torch.meshgrid(u, v)                                                                         # np.mgrid[0: Height, 0: Width] -> Array of size [2, Height, Width]. 1st Dim slice [0]: Row index /  1st Dim slice [1]: Column index
+            img_pixs = torch.meshgrid(u, v, indexing="ij")                                                          # np.mgrid[0: Height, 0: Width] -> Array of size [2, Height, Width]. 1st Dim slice [0]: Row index /  1st Dim slice [1]: Column index
             img_pixs = torch.stack(img_pixs, dim=0).reshape(2, -1)                                                  # 2D Array of size (2, Height * Width). Each column of img_pixs corresponds to a single pixel's (row, col) = (u, v) coordinate in the original depth image (sorted by rows).
             img_pixs[[0, 1], :] = img_pixs[[1, 0], :]                                                               # Swap (row, col) into (col, row).
             Img_pixs_ones = torch.cat((img_pixs, torch.ones((1, img_pixs.shape[1]), device = self.device)), dim=0)  # 2D Array of size (3, Height * Width). Transforming from inhomogenious to homogeneous pixel coordinets (adding a row of 1s at the end): (col, row, 1)
@@ -295,7 +301,7 @@ class BasicEnvironmentModel:
         return num_occupied_cells
         
     def update_environment_map(self, depth_images: torch.Tensor, drone_pose: torch.Tensor):
-        
+
         self.compute_extrinsics(drone_pose)
 
         self.generate_PointCloud(depth_images)
@@ -308,6 +314,10 @@ class BasicEnvironmentModel:
         self._old_grid_area = new_grid_area
         self._episode_steps += 1
         self._update_subgoals(drone_pose)
+        self._update_curiosity(drone_pose[:, :3])
+        if getattr(self, "test_global_planner", False):
+            self._initialize_test_frontier(drone_pose[:, :3])
+            self._maybe_log_test_map()
 
 
     def reset_environment_map(self, idx_reset):
@@ -361,9 +371,8 @@ class BasicEnvironmentModel:
                 self.subgoal_reward_accum[env_ids] = 0.0
                 self.subgoal_steps[env_ids] = 0.0
             self._select_frontier_targets(drone_pos, need_new, coverage_ratio)
-        if self.manager is not None:
+        if self.manager is not None and getattr(self.manager, "training", False):
             self.manager.update()
-        self._update_curiosity(drone_pos)
 
     def _select_frontier_targets(self, drone_pos: torch.Tensor, mask: torch.Tensor, coverage_ratio: torch.Tensor):
         if mask.ndim == 0:
@@ -395,11 +404,13 @@ class BasicEnvironmentModel:
             candidate_mask = frontier_mask[env_idx]
             if not candidate_mask.any():
                 self.subgoal_active[env_idx] = False
+                self.frontier_snapshot[env_idx] = None
                 continue
             scores_env = scores[env_idx][candidate_mask]
             valid_count = int(torch.sum(torch.isfinite(scores_env)).item())
             if valid_count == 0:
                 self.subgoal_active[env_idx] = False
+                self.frontier_snapshot[env_idx] = None
                 continue
             coords = candidate_mask.nonzero(as_tuple=False)
             gains_env = gain[env_idx][candidate_mask]
@@ -413,24 +424,28 @@ class BasicEnvironmentModel:
             order = order[:take]
             if take == 0:
                 self.subgoal_active[env_idx] = False
+                self.frontier_snapshot[env_idx] = None
                 continue
             cand_feat = torch.stack(
                 [gains_env[order], distances_env[order], sorted_scores[:take], headings[order]],
                 dim=1,
             )
             cand_pos = torch.stack([world_x[order], world_y[order]], dim=1)
+            coords_ordered = coords[order]
 
-            choice = 0
+            heuristic_choice = 0
+            choice = heuristic_choice
             if self.manager is not None:
-                choice = self.manager.select_frontier(
+                chosen_idx = self.manager.select_frontier(
                     env_idx,
                     cand_feat,
                     cand_pos,
                     coverage_ratio[env_idx].item(),
                     float(self._episode_steps[env_idx].item()),
+                    heuristic_action=heuristic_choice,
                 )
-                if choice is None or choice < 0 or choice >= take:
-                    choice = 0
+                if chosen_idx is not None:
+                    choice = max(0, min(int(chosen_idx), take - 1))
 
             self.current_subgoal_world[env_idx, 0] = cand_pos[choice, 0]
             self.current_subgoal_world[env_idx, 1] = cand_pos[choice, 1]
@@ -438,10 +453,55 @@ class BasicEnvironmentModel:
             self.subgoal_active[env_idx] = True
             new_dist = torch.linalg.norm(self.current_subgoal_world[env_idx, :2] - drone_pos[env_idx, :2])
             self.prev_subgoal_distance[env_idx] = new_dist
+            self._store_frontier_snapshot(env_idx, candidate_mask, coords_ordered, choice)
 
         inactive = mask & (~self.subgoal_active)
         if inactive.any():
             self.subgoal_active[inactive] = False
+            for idx in torch.nonzero(inactive, as_tuple=False).squeeze(-1).tolist():
+                self.frontier_snapshot[idx] = None
+
+    def _store_frontier_snapshot(self, env_idx: int, frontier_mask_env: torch.Tensor, coords_ordered: torch.Tensor, choice_idx: int) -> None:
+        vis = torch.zeros_like(frontier_mask_env, dtype=torch.uint8).cpu()
+        mask_cpu = frontier_mask_env.cpu()
+        vis[mask_cpu] = 1
+        coords_cpu = coords_ordered.cpu() if coords_ordered is not None else None
+        if coords_cpu is not None and coords_cpu.numel() > 0 and 0 <= choice_idx < coords_cpu.shape[0]:
+            cx, cy = coords_cpu[choice_idx].tolist()
+            vis[int(cx), int(cy)] = 2
+        drone_cell = self.drone_grid_loc[env_idx]
+        gx, gy = int(drone_cell[0].item()), int(drone_cell[1].item())
+        if 0 <= gx < vis.shape[0] and 0 <= gy < vis.shape[1]:
+            vis[gx, gy] = 3
+        self.frontier_snapshot[env_idx] = vis
+
+    def _initialize_test_frontier(self, drone_pos: torch.Tensor) -> None:
+        if not getattr(self, "test_global_planner", False):
+            self._last_test_map_step = torch.zeros_like(self._last_test_map_step)
+            return
+        for env_idx in range(self.num_envs):
+            if self.subgoal_active[env_idx]:
+                continue
+            grid_loc = self.drone_grid_loc[env_idx]
+            if torch.any(grid_loc < 0):
+                continue
+            target = grid_loc + torch.tensor([0, 1], device=self.device)
+            target[0] = torch.clamp(target[0], 0, self._grid_num[0] - 1)
+            target[1] = torch.clamp(target[1], 0, self._grid_num[1] - 1)
+            world_x = self._grid_orig_tensor[0] + (target[0].float() + 0.5) * self._grid_size
+            world_y = self._grid_orig_tensor[1] + (target[1].float() + 0.5) * self._grid_size
+            self.current_subgoal_world[env_idx, 0] = world_x
+            self.current_subgoal_world[env_idx, 1] = world_y
+            self.current_subgoal_world[env_idx, 2] = self.subgoal_height
+            self.subgoal_active[env_idx] = True
+            self.prev_subgoal_distance[env_idx] = torch.linalg.norm(
+                self.current_subgoal_world[env_idx, :2] - drone_pos[env_idx, :2]
+            )
+            mask = torch.zeros_like(self._environment_map[env_idx], dtype=torch.bool)
+            mask[int(target[0].item()), int(target[1].item())] = True
+            coords = torch.tensor([[int(target[0].item()), int(target[1].item())]], device=self.device)
+            self._store_frontier_snapshot(env_idx, mask, coords, 0)
+        self.test_global_planner = False
 
     def _update_curiosity(self, drone_pos: torch.Tensor):
         grid_locs = self.drone_grid_loc.clone()
@@ -541,6 +601,7 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         self.drone_trajectory = [torch.empty((0, 2), dtype=torch.int, device=self.device) for _ in range(self.num_envs)]
         self.environment_map_ended_episodes = {i: None for i in range(self.num_envs)}
         self.drone_trajectory_ended_episodes = {i: None for i in range(self.num_envs)}
+        self.frontier_snapshot = {i: None for i in range(self.num_envs)}
 
     
     @property
@@ -550,6 +611,10 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
     @property
     def wandb_drone_traj_dict(self) -> dict:
         return self.drone_trajectory_ended_episodes
+
+    @property
+    def wandb_frontier_map_dict(self) -> dict:
+        return self.frontier_snapshot
     
     @property
     def drone_orientation_2D(self) -> torch.Tensor:
@@ -779,6 +844,24 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         self.generate_PointCloud(depth_images)
 
         new_grid_area = self.update_gridmap_from_PointCloud(drone_pose)  # tensor of integers of size (num_envs)
+
+        if getattr(self, "test_global_planner", False):
+            interval = getattr(self, "_test_map_interval", 1000)
+            if interval > 0:
+                current_step = int(self._episode_steps[0].item()) if self._episode_steps.numel() > 0 else 0
+                if current_step % interval == 0:
+                    env_idx = 0
+                    self.environment_map_ended_episodes[env_idx] = (
+                        self._environment_map[env_idx].detach().to("cpu").clone()
+                    )
+                    if hasattr(self, "drone_trajectory"):
+                        self.drone_trajectory_ended_episodes[env_idx] = self.drone_trajectory[env_idx].clone()
+                    frontier_vis = self.frontier_snapshot.get(env_idx)
+                    if isinstance(frontier_vis, torch.Tensor):
+                        self.frontier_snapshot[env_idx] = frontier_vis.clone()
+                    else:
+                        self.frontier_snapshot[env_idx] = frontier_vis
+                    self._last_test_map_step[env_idx] = self._episode_steps[env_idx]
         
         self.area_diff = new_grid_area - self._old_grid_area         # tensor of integers of size (num_envs)
         self.area_diff[self._episode_steps == 0]= 0                  # Force the fist step to give area_diff =0. Otherwise the reward will be too big (everything is seen for the first time)
@@ -788,7 +871,7 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         self._episode_steps += 1
 
         for i in range(self.num_envs):
-            self.drone_trajectory[i] = torch.cat((self.drone_trajectory[i], self.drone_grid_loc[i].unsqueeze(0)), dim=0)       
+            self.drone_trajectory[i] = torch.cat((self.drone_trajectory[i], self.drone_grid_loc[i].unsqueeze(0)), dim=0)
 
     def reset_environment_map(self, idx_reset):     # idx_reset: tensor of shape (num_envs) with 0/1 for the environments that don't/ do need to be reset.
         

@@ -19,6 +19,9 @@ parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster m
 parser.add_argument("--ray_debug_hits", action="store_true", help="Additionally print raw ray hit points (env 0).")
 parser.add_argument("--manager_rl", action="store_true", help="Enable RL frontier manager during evaluation (no training).")
 parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maximum frontier candidates considered by the manager during eval.")
+parser.add_argument("--planner_mode", choices=["heuristic", "observe", "assist", "rl"], default="heuristic", help="Frontier planner mode during evaluation.")
+parser.add_argument("--manager_load_path", type=str, default=None, help="Optional path to a frontier manager checkpoint for evaluation.")
+parser.add_argument("--test_global_planner", action="store_true", help="Force an initial frontier goal for visualization.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -41,7 +44,6 @@ from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
-from DRL_UAV_Indoor_Exploration.isaac45.mdp.common import ensure_ray_caster_initialized
 from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
 
 # Stable-Baselines3 tools
@@ -101,26 +103,41 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     # Read configurations about the agent-training
     policy_arch = agent_cfg.pop("policy")
     n_timesteps = agent_cfg.pop("n_timesteps")
+    planner_mode = args_cli.planner_mode
+    manager_enabled = planner_mode != "heuristic" or args_cli.manager_rl
+    if not manager_enabled:
+        planner_mode = "heuristic"
     print("Using policy:", policy_arch)
     
     # Create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
     base_env = env.unwrapped
-    base_env.raycast_debug_print = args_cli.ray_debug
-    base_env.raycast_debug_print_hits = args_cli.ray_debug_hits
-    ensure_ray_caster_initialized(env)
+    # base_env.raycast_debug_print = args_cli.ray_debug
+    # base_env.raycast_debug_print_hits = args_cli.ray_debug_hits
+    # ensure_ray_caster_initialized(env)
+
+    env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)
+    env.unwrapped.env_map = env_model
+    env_model.manager_mode = planner_mode
+    env_model.test_global_planner = args_cli.test_global_planner
 
     frontier_manager = None
-    if args_cli.manager_rl and hasattr(base_env, "env_map"):
+    if manager_enabled and planner_mode != "heuristic":
         device = getattr(base_env, "device", getattr(base_env.sim, "device", "cpu"))
         frontier_manager = FrontierRLManager(
             device=device,
             max_candidates=args_cli.manager_max_candidates,
             training=False,
+            mode=planner_mode,
         )
-        base_env.env_map.register_manager(frontier_manager)
-    env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)   
-    env.unwrapped.env_map = env_model
+        env_model.register_manager(frontier_manager, mode=planner_mode)
+        if args_cli.manager_load_path is not None:
+            try:
+                state = torch.load(args_cli.manager_load_path, map_location=device)
+                frontier_manager.load_state_dict(state)
+                print(f"[INFO] Loaded frontier manager from {args_cli.manager_load_path}")
+            except Exception as err:
+                print(f"[WARN] Failed to load frontier manager checkpoint ({err})")
     
     # Wrapper around environment for SB3: actions are normalized forward/back velocity [-1,1] and yaw rate [-1,1]
     env = Sb3VecEnvWrapper(env, lower_bound=np.array([-1, -1]), upper_bound=np.array([1, 1]))

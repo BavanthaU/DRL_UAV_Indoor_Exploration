@@ -9,8 +9,7 @@ from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
-from isaaclab.sensors import CameraCfg
-from isaaclab.sensors import RayCasterCfg, patterns
+from isaaclab.sensors import CameraCfg, ContactSensorCfg
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.envs import ManagerBasedEnv
 
@@ -59,18 +58,11 @@ class QuadrotorSceneCfg(InteractiveSceneCfg):
         offset=CameraCfg.OffsetCfg(pos=(0.0, 0.0,-0.25), convention="world"),
     )
 
-    ray_caster = RayCasterCfg(
-        prim_path="{ENV_REGEX_NS}/Robot/body",
+    contact_forces = ContactSensorCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/.*",
         update_period=0.0,
-        mesh_prim_paths=["/World/envs"],
-        max_distance=5.0,
-        attach_yaw_only=False,
-        pattern_cfg=patterns.LidarPatternCfg(
-            channels=1,
-            vertical_fov_range=(0.0, 0.0),
-            horizontal_fov_range=(-180.0, 180.0),
-            horizontal_res=90.0,
-        ),
+        history_length=1,
+        track_air_time=False,
         debug_vis=False,
     )
 
@@ -139,17 +131,22 @@ class RewardsCfg:
         weight=0.1,
     )
 
-    # Penalty for approaching obstacles detected via ray-cast
-    obstacle_proximity = RewTerm(
-        func=mdp.rewards.raycast_proximity_penalty,
+    # # Penalty for approaching obstacles detected via ray-cast
+    # obstacle_proximity = RewTerm(
+    #     func=mdp.rewards.raycast_proximity_penalty,
+    #     weight=1.0,
+    #     params={
+    #         "near_threshold": 1.0,
+    #         "crash_threshold": 0.2,
+    #         "near_penalty": -0.5,
+    #         "crash_penalty": -10.0,
+    #         "vertical_tolerance": 1.5,
+    #     },
+    # )
+    collision_penalty = RewTerm(
+        func=mdp.rewards.check_collision_single_contact_sensor,
         weight=1.0,
-        params={
-            "near_threshold": 1.0,
-            "crash_threshold": 0.2,
-            "near_penalty": -0.5,
-            "crash_penalty": -10.0,
-            "vertical_tolerance": 1.5,
-        },
+        params={"M": -10.0, "N": 0.0, "force_threshold": 0.1},
     )
     subgoal_progress = RewTerm(
         func=mdp.rewards.subgoal_progress_reward,
@@ -164,8 +161,12 @@ class RewardsCfg:
     # Reward for finishing exploration
     exploration_finished = RewTerm(func=mdp.rewards.fixed_area_covered, weight=150.0, params={"num_cells_to_cover":5200})
     
-    # Reward for first time entering a new room
-    entered_room = RewTerm(func=mdp.rewards.doorway_reward_per_drone, weight=10.0, params={"doorway_radius":1.0},)
+    # # Reward for first time entering a new room (disabled: relied on hardcoded doorway coordinates)
+    # entered_room = RewTerm(
+    #     func=mdp.rewards.doorway_reward_per_drone,
+    #     weight=10.0,
+    #     params={"doorway_radius": 1.0},
+    # )
 
     # Penalty for staying idle
     idle_behavior = RewTerm(func=mdp.rewards.penalize_idle_behavior, weight = 1, params={"idle_penalty":-0.01, "motion_threshold":0.10})
@@ -185,11 +186,15 @@ class TerminationCfg:
     # Termination if drone flips upside down along x or y axis (used for non-linear controller)
     drone_flips = DoneTerm(func=mdp.terminations.drone_flips_upsidedown)
 
-    # Termination if ray-cast detects obstacle closer than threshold
+    # # Termination if ray-cast detects obstacle closer than threshold
+    # drone_crashes = DoneTerm(
+    #     func=mdp.terminations.drone_crashes_raycast,
+    #     params={"crash_threshold": 0.2, "vertical_tolerance": 1.5},
+    # )
     drone_crashes = DoneTerm(
-        func=mdp.terminations.drone_crashes_raycast,
-        params={"crash_threshold": 0.2, "vertical_tolerance": 1.5},
-    )  
+        func=mdp.terminations.drone_crashes_single_contact_sensor,
+        params={"force_threshold": 0.1},
+    )
 
 @configclass
 class DroneEnvCfg(ManagerBasedRLEnvCfg):

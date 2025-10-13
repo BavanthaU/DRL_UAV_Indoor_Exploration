@@ -1,6 +1,22 @@
 """
-Script for training a drone explorationpolicy in Isaac Sim using SAC.
-Supports initialization from imitation learning (IL) and replay buffer pre-filling. 
+Training script for the drone exploration SAC policy.
+
+Quick primer on planner modes:
+
+  --planner_mode heuristic   -> Pure classical frontier selector (default). No frontier manager created.
+  --planner_mode observe     -> Classical selector commands. Frontier manager logs demonstrations only.
+  --planner_mode assist      -> Classical selector commands. Manager learns in the background from demo data.
+  --planner_mode rl          -> Learned frontier manager produces subgoals. Requires --manager_rl.
+
+Other useful switches:
+
+  --manager_rl               -> Build the frontier manager (needed for observe/assist/rl).
+  --manager_load_path PATH   -> Load a saved frontier manager state (works in training/validation/replay).
+  --manager_*                -> Hyperparameters for the frontier manager (lr, gamma, epsilon, max candidates).
+  --ray_debug[/_hits]        -> Print ray-caster distances / raw hits for debugging.
+
+Training saves both the SAC model (model.zip) and the frontier manager state (manager_state.pt) in the
+run directory. Use --resume to continue SAC, and --manager_load_path to reload the planner.
 """
 
 import argparse
@@ -18,7 +34,7 @@ parser.add_argument("--IL_model_path", type=str, default=None, help="Path to IL.
 parser.add_argument("--fill_replay_buffer", action="store_true", default=False, help="Fill replay buffer with IL trajectories")
 parser.add_argument("--buffer_path", type=str, default=None, help="Path to buffer file..")
 parser.add_argument("--resume", type=str, default=None, help="Path to SB3 .zip checkpoint to resume from")
-parser.add_argument("--wandb_project", type=str, default="isaac-drone-higherarchical", help="W&B project name")
+parser.add_argument("--wandb_project", type=str, default="isaac-drone-hierarchical", help="W&B project name")
 parser.add_argument("--wandb_name", type=str, default=None, help="W&B run name (optional)")
 parser.add_argument("--wandb_mode", type=str, default="online", help="'online'|'offline'|'disabled'")
 parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster min distances each step.")
@@ -28,6 +44,9 @@ parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maxim
 parser.add_argument("--manager_lr", type=float, default=1e-3, help="Learning rate for the frontier manager policy.")
 parser.add_argument("--manager_gamma", type=float, default=0.95, help="Discount factor for frontier manager rewards.")
 parser.add_argument("--manager_epsilon", type=float, default=0.1, help="Epsilon-greedy exploration for the frontier manager.")
+parser.add_argument("--planner_mode", choices=["heuristic", "observe", "assist", "rl"], default="heuristic", help="Frontier planner mode: 'heuristic' for classical, 'observe' to log heuristics, 'assist' to imitate while heuristics run, 'rl' to learn subgoals.")
+parser.add_argument("--manager_load_path", type=str, default=None, help="Path to a saved frontier manager checkpoint.")
+parser.add_argument("--test_global_planner", action="store_true", help="Force an initial frontier target so visualization works on tiny maps.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -81,12 +100,13 @@ class TqdmCallback(BaseCallback):
 
 
 class WandbMetricsCallback(BaseCallback):
-    """Periodic logging of custom exploration metrics to Weights & Biases."""
+    """Periodic logging of custom exploration metrics and maps to Weights & Biases."""
 
-    def __init__(self, env, log_interval: int = 200):
+    def __init__(self, env, log_interval: int = 200, max_map_images: int = 2):
         super().__init__()
         self._env = env
         self._log_interval = max(1, log_interval)
+        self._max_map_images = max(0, max_map_images)
 
     def _on_step(self) -> bool:
         if self.num_timesteps % self._log_interval != 0:
@@ -94,39 +114,126 @@ class WandbMetricsCallback(BaseCallback):
 
         env_base = getattr(self._env, "unwrapped", self._env)
         env_map = getattr(env_base, "env_map", None)
-        metrics: dict[str, float] = {}
+        log_payload: dict[str, object] = {}
 
         if env_map is not None and hasattr(env_map, "environment_map"):
             try:
                 coverage = (env_map.environment_map != 0).float().mean(dim=(1, 2))
-                metrics["coverage/mean"] = coverage.mean().item()
-                metrics["coverage/min"] = coverage.min().item()
-                metrics["coverage/max"] = coverage.max().item()
+                log_payload["coverage/mean"] = coverage.mean().item()
+                log_payload["coverage/min"] = coverage.min().item()
+                log_payload["coverage/max"] = coverage.max().item()
+                log_payload["coverage/mean_percent"] = (coverage * 100.0).mean().item()
+                total_cells = float(env_map.environment_map.shape[1] * env_map.environment_map.shape[2])
+                explored_cells = coverage * total_cells
+                log_payload["coverage/mean_cells"] = explored_cells.mean().item()
+                log_payload["coverage/min_cells"] = explored_cells.min().item()
             except Exception:
                 pass
 
-            if hasattr(env_map, "prev_subgoal_distance") and env_map.prev_subgoal_distance.numel() > 0:
-                metrics["subgoal/distance_mean"] = env_map.prev_subgoal_distance.mean().item()
-                metrics["subgoal/distance_min"] = env_map.prev_subgoal_distance.min().item()
-
-            if hasattr(env_map, "subgoal_reward_accum") and env_map.subgoal_reward_accum.numel() > 0:
-                metrics["subgoal/accum_reward_mean"] = env_map.subgoal_reward_accum.mean().item()
+            if hasattr(env_map, "subgoal_active") and env_map.subgoal_active.numel() > 0:
+                active_mask = env_map.subgoal_active.bool()
+                log_payload["subgoal/active_ratio"] = active_mask.float().mean().item()
+                if active_mask.any():
+                    distances = env_map.prev_subgoal_distance[active_mask]
+                    log_payload["subgoal/distance_mean"] = distances.mean().item()
+                    log_payload["subgoal/distance_min"] = distances.min().item()
+                    rewards_accum = env_map.subgoal_reward_accum[active_mask] if hasattr(env_map, "subgoal_reward_accum") else None
+                    if rewards_accum is not None:
+                        log_payload["subgoal/accum_reward_mean"] = rewards_accum.mean().item()
 
             if hasattr(env_map, "area_diff") and env_map.area_diff.numel() > 0:
-                metrics["coverage/new_cells_mean"] = env_map.area_diff.float().mean().item()
+                log_payload["coverage/new_cells_mean"] = env_map.area_diff.float().mean().item()
+
+            if hasattr(env_map, "curiosity_reward") and env_map.curiosity_reward.numel() > 0:
+                log_payload["curiosity/mean"] = env_map.curiosity_reward.mean().item()
+
+            map_logs = {}
+            if self._max_map_images > 0 and hasattr(env_map, "wandb_environment_map_dict"):
+                try:
+                    map_dict = env_map.wandb_environment_map_dict
+                    traj_dict = getattr(env_map, "wandb_drone_traj_dict", {})
+                    logged = 0
+                    for env_idx, grid in map_dict.items():
+                        if grid is None or logged >= self._max_map_images:
+                            continue
+                        arr = grid.detach().cpu().numpy().astype(np.uint8)
+                        traj = traj_dict.get(env_idx)
+                        arr = np.clip(arr, 0, 3)
+                        if traj is not None and traj.numel() > 0:
+                            arr = arr.copy()
+                            traj_np = traj.detach().cpu().numpy()
+                            for point in traj_np:
+                                x, y = int(point[0]), int(point[1])
+                                if 0 <= x < arr.shape[0] and 0 <= y < arr.shape[1]:
+                                    arr[x, y] = 3
+                        palette = np.array([
+                            [20, 20, 20],      # unknown
+                            [200, 200, 200],    # free space
+                            [240, 80, 80],      # obstacle
+                            [80, 160, 255],     # trajectory
+                        ], dtype=np.uint8)
+                        color_img = palette[arr]
+                        map_logs[f"maps/env_{env_idx}"] = color_img
+                        logged += 1
+                    if logged > 0:
+                        env_map.reset_wandb_dicts_ended_episodes()
+                except Exception:
+                    map_logs = {}
+
+            if map_logs:
+                try:
+                    import wandb
+
+                    for key, arr in map_logs.items():
+                        log_payload[key] = wandb.Image(arr, caption=key)
+                except Exception:
+                    pass
+
+            frontier_logs = {}
+            if self._max_map_images > 0 and hasattr(env_map, "wandb_frontier_map_dict"):
+                try:
+                    frontier_dict = env_map.wandb_frontier_map_dict
+                    logged_frontiers = 0
+
+                    for env_idx, vis in frontier_dict.items():
+                        if vis is None or logged_frontiers >= self._max_map_images:
+                            continue
+                        arr = vis.detach().cpu().numpy().astype(np.uint8)
+                        palette = np.array([
+                            [20, 20, 20],      # background
+                            [255, 215, 0],      # frontier candidates
+                            [80, 200, 120],     # selected frontier
+                            [80, 160, 255],     # drone position
+                        ], dtype=np.uint8)
+                        color_img = palette[arr]
+                        frontier_logs[f"frontiers/env_{env_idx}"] = color_img
+                        env_map.frontier_snapshot[env_idx] = None
+                        logged_frontiers += 1
+                except Exception:
+                    frontier_logs = {}
+
+            if frontier_logs:
+                try:
+                    import wandb
+
+                    for key, arr in frontier_logs.items():
+                        log_payload[key] = wandb.Image(arr, caption=key)
+                except Exception:
+                    pass
 
         manager = getattr(env_map, "manager", None) if env_map is not None else None
         if manager is not None:
             if hasattr(manager, "epsilon"):
-                metrics["manager/epsilon"] = float(manager.epsilon)
+                log_payload["manager/epsilon"] = float(manager.epsilon)
             if hasattr(manager, "_buffer"):
-                metrics["manager/buffer_size"] = float(len(manager._buffer))
+                log_payload["manager/buffer_size"] = float(len(manager._buffer))
 
-        if metrics:
+        if log_payload:
             try:
                 import wandb
 
-                wandb.log(metrics, step=self.num_timesteps)
+                log_payload["global_step"] = self.num_timesteps
+                wandb.log(log_payload)
             except Exception:
                 pass
         return True
@@ -144,7 +251,6 @@ from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
-from DRL_UAV_Indoor_Exploration.isaac45.mdp.common import ensure_ray_caster_initialized
 from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
 
 # Stable-Baselines3 tools
@@ -170,7 +276,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["seed"]
     if args_cli.max_iterations is not None:
-        agent_cfg["n_timesteps"] = args_cli.max_iterations * agent_cfg["n_steps"] * env_cfg.scene.num_envs
+        if "n_steps" in agent_cfg:
+            horizon = agent_cfg["n_steps"] * env_cfg.scene.num_envs
+            agent_cfg["n_timesteps"] = args_cli.max_iterations * horizon
+        else:
+            agent_cfg["n_timesteps"] = args_cli.max_iterations
 
 
     env_cfg.seed = agent_cfg["seed"]
@@ -204,6 +314,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
                 "task": args_cli.task,
                 "seed": args_cli.seed,
                 "num_envs": env_cfg.scene.num_envs,
+                "planner_mode": args_cli.planner_mode,
             },
         )
         _wandb = True
@@ -218,28 +329,44 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     # Read configurations about the agent-training
     policy_arch = agent_cfg.pop("policy")
     n_timesteps = agent_cfg.pop("n_timesteps")
+    planner_mode = args_cli.planner_mode
+    manager_enabled = planner_mode != "heuristic" or args_cli.manager_rl
+    if not manager_enabled:
+        planner_mode = "heuristic"
 
     # Create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode=None)
     base_env = env.unwrapped
-    base_env.raycast_debug_print = args_cli.ray_debug
-    base_env.raycast_debug_print_hits = args_cli.ray_debug_hits
-    ensure_ray_caster_initialized(env)
+    # base_env.raycast_debug_print = args_cli.ray_debug
+    # base_env.raycast_debug_print_hits = args_cli.ray_debug_hits
+    # ensure_ray_caster_initialized(env)
+
+    env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)
+    env.unwrapped.env_map = env_model
+    env_model.manager_mode = planner_mode
+    env_model.test_global_planner = args_cli.test_global_planner
 
     frontier_manager = None
-    if args_cli.manager_rl and hasattr(base_env, "env_map"):
+    if manager_enabled and planner_mode != "heuristic":
         device = getattr(base_env, "device", getattr(base_env.sim, "device", "cpu"))
+        train_manager = planner_mode in ("assist", "rl")
         frontier_manager = FrontierRLManager(
             device=device,
             max_candidates=args_cli.manager_max_candidates,
             lr=args_cli.manager_lr,
             gamma=args_cli.manager_gamma,
             epsilon=args_cli.manager_epsilon,
-            training=True,
+            training=train_manager,
+            mode=planner_mode,
         )
-        base_env.env_map.register_manager(frontier_manager)
-    env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)
-    env.unwrapped.env_map = env_model
+        env_model.register_manager(frontier_manager, mode=planner_mode)
+        if args_cli.manager_load_path is not None:
+            try:
+                state = torch.load(args_cli.manager_load_path, map_location=device)
+                frontier_manager.load_state_dict(state)
+                print(f"[INFO] Loaded frontier manager from {args_cli.manager_load_path}")
+            except Exception as err:
+                print(f"[WARN] Failed to load frontier manager checkpoint ({err})")
 
     # Wrapper around environment for SB3: actions are normalized forward/back velocity [-1,1] and yaw rate [-1,1]
     env = Sb3VecEnvWrapper(env, lower_bound=np.array([-1, -1]), upper_bound=np.array([1, 1]))
@@ -357,7 +484,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     # agent = SAC.load(checkpoint_path, env, print_system_info=True, tensorboard_log=os.path.join(log_dir, f"tensorboard_runs"))
 
     # configure the logger
-    new_logger = configure(log_dir, ["stdout", "tensorboard", "csv"])
+    new_logger = configure(log_dir, ["stdout", "csv"])
     agent.set_logger(new_logger)
     # callbacks for agent
     # callbacks
@@ -379,6 +506,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
 
     # save the final model
     agent.save(os.path.join(log_dir, "model"))
+
+    if frontier_manager is not None:
+        manager_path = os.path.join(log_dir, "manager_state.pt")
+        torch.save(frontier_manager.state_dict(), manager_path)
+        print(f"[INFO] Saved frontier manager checkpoint to {manager_path}")
+        if _wandb:
+            try:
+                wandb.save(manager_path)
+            except Exception:
+                pass
 
     # close the simulator
     env.close()

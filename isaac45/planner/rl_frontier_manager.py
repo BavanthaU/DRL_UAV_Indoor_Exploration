@@ -5,7 +5,6 @@ from typing import Dict, List, Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 @dataclass
@@ -28,6 +27,7 @@ class FrontierRLManager:
         epsilon: float = 0.1,
         batch_size: int = 32,
         training: bool = True,
+        mode: str = "rl",
     ) -> None:
         self.device = torch.device(device)
         self.max_candidates = max_candidates
@@ -45,10 +45,16 @@ class FrontierRLManager:
         self.gamma = gamma
         self.epsilon = epsilon
         self.batch_size = batch_size
-        self.training = training
+        self.mode = mode
+        if self.mode not in ("heuristic", "observe", "assist", "rl"):
+            raise ValueError(f"Unsupported planner mode: {self.mode}")
+        self.training = training and mode in ("assist", "rl")
+        self.collect_demonstrations = mode in ("observe", "assist")
         self._pending: Dict[int, _PendingDecision] = {}
         self._buffer: List[tuple[torch.Tensor, int, int, float]] = []
         self._reward_gamma = gamma
+        self.demonstrations: List[tuple[torch.Tensor, int, int]] = []
+        self.max_demonstrations = 100_000
 
     def _build_obs(
         self,
@@ -81,36 +87,65 @@ class FrontierRLManager:
         candidate_positions: torch.Tensor,
         coverage: float,
         timestep: float,
+        heuristic_action: Optional[int] = None,
     ) -> Optional[int]:
         """Select a frontier index for the given environment."""
         k = candidate_features.shape[0]
         if k == 0:
             return None
         obs = self._build_obs(candidate_features, coverage, timestep)
+
+        if heuristic_action is None:
+            heuristic_action = 0
+        heuristic_action = max(0, min(heuristic_action, k - 1))
+
+        if self.mode == "observe":
+            if self.collect_demonstrations:
+                if len(self.demonstrations) >= self.max_demonstrations:
+                    self.demonstrations.pop(0)
+                self.demonstrations.append((obs.detach(), heuristic_action, k))
+            return heuristic_action
+
         logits = self.policy(obs.unsqueeze(0)).squeeze(0)
         mask = torch.full((self.max_candidates,), -1e9, device=self.device)
         mask[:k] = 0.0
         logits = logits + mask
-        if self.training:
-            if torch.rand(1, device=self.device).item() < self.epsilon:
-                action_idx = int(torch.randint(0, k, (1,), device=self.device).item())
+        action_idx = heuristic_action
+        if self.mode == "rl":
+            if self.training:
+                if torch.rand(1, device=self.device).item() < self.epsilon:
+                    action_idx = int(torch.randint(0, k, (1,), device=self.device).item())
+                else:
+                    dist = torch.distributions.Categorical(logits=logits)
+                    action_idx = int(dist.sample().item())
             else:
-                dist = torch.distributions.Categorical(logits=logits)
-                action_idx = int(dist.sample().item())
-        else:
-            valid_logits = logits[:k]
-            action_idx = int(torch.argmax(valid_logits).item())
+                valid_logits = logits[:k]
+                action_idx = int(torch.argmax(valid_logits).item())
         if action_idx >= k:
             action_idx = k - 1
 
-        if self.training:
+        action_for_training: Optional[int] = None
+        if self.mode == "rl":
+            action_for_training = action_idx
+            final_choice = action_idx
+        elif self.mode == "assist":
+            action_for_training = heuristic_action
+            final_choice = heuristic_action
+        else:  # heuristic fallback (should not reach here for observe)
+            final_choice = heuristic_action
+
+        if self.training and action_for_training is not None:
             self._pending[env_idx] = _PendingDecision(
                 obs=obs.detach(),
-                action=action_idx,
+                action=action_for_training,
                 valid_count=k,
                 env_idx=env_idx,
             )
-        return action_idx
+        if self.collect_demonstrations and self.mode == "assist":
+            if len(self.demonstrations) >= self.max_demonstrations:
+                self.demonstrations.pop(0)
+            self.demonstrations.append((obs.detach(), heuristic_action, k))
+        return final_choice
 
     def on_subgoal_complete(
         self,
@@ -182,3 +217,24 @@ class FrontierRLManager:
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.policy.parameters(), 1.0)
         self.optimizer.step()
+
+    def state_dict(self) -> dict:
+        return {
+            "policy": self.policy.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "epsilon": self.epsilon,
+            "mode": self.mode,
+        }
+
+    def load_state_dict(self, state: dict) -> None:
+        if "policy" in state:
+            self.policy.load_state_dict(state["policy"])
+        if "optimizer" in state:
+            try:
+                self.optimizer.load_state_dict(state["optimizer"])
+            except Exception:
+                pass
+        if "epsilon" in state:
+            self.epsilon = float(state["epsilon"])
+        if "mode" in state:
+            self.mode = state["mode"]

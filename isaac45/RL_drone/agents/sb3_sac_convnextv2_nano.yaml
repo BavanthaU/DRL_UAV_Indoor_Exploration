@@ -1,10 +1,10 @@
-# SAC configuration using frozen MobileNet feature extractor
+# SAC configuration using frozen ConvNeXtV2-Nano feature extractor
 seed: 42
 n_timesteps: !!float 2.048e7
 
 policy: 'MultiInputPolicy'
 learning_rate: !!float 3.0e-4
-batch_size: 16 # chnage this when actually training
+batch_size: 16
 gamma: 0.99
 tau: 0.005
 
@@ -17,15 +17,14 @@ policy_kwargs: "dict(
   log_std_init=-0.5,
   activation_fn=nn.ELU,
   net_arch=dict(pi=[256,128], qf=[256,256]),
-  features_extractor_class='MobileNetFrozenExtractor',
+  features_extractor_class='ConvNeXtV2NanoFrozenExtractor',
   features_extractor_kwargs=dict(
-    image_out=128,
+    image_out=256,
     vector_out=64,
-    features_dim=128,
+    features_dim=256,
     freeze_backbone=True
   ),
   share_features_extractor=True)"
 
-# chnage these when actually training
-buffer_size: 100 
+buffer_size: 100
 learning_starts: 100
