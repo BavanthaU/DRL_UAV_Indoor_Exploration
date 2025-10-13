@@ -81,7 +81,7 @@ class BasicEnvironmentModel:
         self.frontier_snapshot = {i: None for i in range(self.num_envs)}
         self.manager_mode = "heuristic"
         self.test_global_planner = False
-        self._test_map_interval = 1000
+        self._test_map_interval = 100
         self._last_test_map_step = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
         # For monitoring progress in RL
@@ -357,6 +357,27 @@ class BasicEnvironmentModel:
             current_dist = torch.linalg.norm(self.current_subgoal_world[:, :2] - drone_pos[:, :2], dim=1)
             need_new = (~self.subgoal_active) | (current_dist <= self.frontier_tolerance)
             self.prev_subgoal_distance[~need_new & self.subgoal_active] = current_dist[~need_new & self.subgoal_active]
+        unknown = (self._environment_map == 0).float().unsqueeze(1)
+        free = (self._environment_map == 1).float().unsqueeze(1)
+        neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
+        frontier_mask_raw = (neighbor_unknown > 0.0) & (free > 0.0)
+        gain_raw = F.conv2d(unknown, self._gain_kernel, padding=2)
+
+        if self.subgoal_active.any():
+            subgoal_coords = ((self.current_subgoal_world[:, :2] - self._grid_orig_tensor) / self._grid_size).floor().to(torch.long)
+            in_bounds_x = (subgoal_coords[:, 0] >= 0) & (subgoal_coords[:, 0] < self._grid_num[0])
+            in_bounds_y = (subgoal_coords[:, 1] >= 0) & (subgoal_coords[:, 1] < self._grid_num[1])
+            in_bounds = in_bounds_x & in_bounds_y
+            active_valid = self.subgoal_active & in_bounds
+            off_map = self.subgoal_active & (~in_bounds)
+            if off_map.any():
+                need_new = need_new | off_map
+            if active_valid.any():
+                fm = frontier_mask_raw.squeeze(1)
+                still_frontier = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+                still_frontier[active_valid] = fm[active_valid, subgoal_coords[active_valid, 0], subgoal_coords[active_valid, 1]]
+                need_new = need_new | (~still_frontier & self.subgoal_active)
+
         coverage_ratio = (self._environment_map != 0).float().mean(dim=(1, 2))
         if need_new.any():
             env_ids = torch.nonzero(need_new, as_tuple=False).squeeze(-1)
@@ -370,22 +391,37 @@ class BasicEnvironmentModel:
                     self.manager.on_subgoal_complete(env_ids, rewards, steps, done_flags=done_flags)
                 self.subgoal_reward_accum[env_ids] = 0.0
                 self.subgoal_steps[env_ids] = 0.0
-            self._select_frontier_targets(drone_pos, need_new, coverage_ratio)
+            self._select_frontier_targets(
+                drone_pos,
+                need_new,
+                coverage_ratio,
+                frontier_mask=frontier_mask_raw,
+                gain=gain_raw,
+            )
         if self.manager is not None and getattr(self.manager, "training", False):
             self.manager.update()
 
-    def _select_frontier_targets(self, drone_pos: torch.Tensor, mask: torch.Tensor, coverage_ratio: torch.Tensor):
+    def _select_frontier_targets(
+        self,
+        drone_pos: torch.Tensor,
+        mask: torch.Tensor,
+        coverage_ratio: torch.Tensor,
+        frontier_mask: torch.Tensor | None = None,
+        gain: torch.Tensor | None = None,
+    ):
         if mask.ndim == 0:
             mask = mask.unsqueeze(0)
-        unknown = (self._environment_map == 0).float().unsqueeze(1)
-        free = (self._environment_map == 1).float().unsqueeze(1)
-        # cells that are free and touch unknown
-        neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
-        frontier_mask = (neighbor_unknown > 0.0) & (free > 0.0)
+        recompute = frontier_mask is None or gain is None
+        if recompute:
+            unknown = (self._environment_map == 0).float().unsqueeze(1)
+            free = (self._environment_map == 1).float().unsqueeze(1)
+            neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
+            frontier_mask = (neighbor_unknown > 0.0) & (free > 0.0)
+            gain = F.conv2d(unknown, self._gain_kernel, padding=2)
+        assert gain is not None and frontier_mask is not None
         if not frontier_mask.any():
             self.subgoal_active[mask] = False
             return
-        gain = F.conv2d(unknown, self._gain_kernel, padding=2)
         gain = gain.squeeze(1)
         frontier_mask = frontier_mask.squeeze(1)
         centers_x = self._cell_centers_x.unsqueeze(0)

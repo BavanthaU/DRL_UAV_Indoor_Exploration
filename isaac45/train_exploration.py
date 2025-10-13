@@ -47,6 +47,8 @@ parser.add_argument("--manager_epsilon", type=float, default=0.1, help="Epsilon-
 parser.add_argument("--planner_mode", choices=["heuristic", "observe", "assist", "rl"], default="heuristic", help="Frontier planner mode: 'heuristic' for classical, 'observe' to log heuristics, 'assist' to imitate while heuristics run, 'rl' to learn subgoals.")
 parser.add_argument("--manager_load_path", type=str, default=None, help="Path to a saved frontier manager checkpoint.")
 parser.add_argument("--test_global_planner", action="store_true", help="Force an initial frontier target so visualization works on tiny maps.")
+parser.add_argument("--teacher_local_planner", action="store_true", help="Warm-start with classical local planner rollouts.")
+parser.add_argument("--teacher_steps", type=int, default=10000, help="Number of transitions to collect from the classical local planner.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -251,7 +253,7 @@ from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
-from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
+from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager, ClassicalLocalPlanner, ClassicalPlannerConfig
 
 # Stable-Baselines3 tools
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -346,6 +348,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     env_model.manager_mode = planner_mode
     env_model.test_global_planner = args_cli.test_global_planner
 
+    teacher_planner = None
+    if args_cli.teacher_local_planner:
+        teacher_planner = ClassicalLocalPlanner(base_env, ClassicalPlannerConfig())
+
     frontier_manager = None
     if manager_enabled and planner_mode != "heuristic":
         device = getattr(base_env, "device", getattr(base_env.sim, "device", "cpu"))
@@ -399,6 +405,26 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
             agent = SAC(policy_arch, env, verbose=1, **agent_cfg)
     else:
         agent = SAC(policy_arch, env, verbose=1, **agent_cfg)
+
+    if args_cli.teacher_local_planner and teacher_planner is not None:
+        prefill_steps = max(0, args_cli.teacher_steps)
+        if prefill_steps > 0:
+            print(f"[INFO] Collecting {prefill_steps} steps from classical local planner for warm start.")
+            obs = env.reset()
+            with torch.no_grad():
+                for step in range(prefill_steps):
+                    actions_tensor = teacher_planner.compute_actions()
+                    actions_np = actions_tensor.detach().cpu().numpy().astype(np.float32)
+                    next_obs, rewards, dones, infos = env.step(actions_np)
+                    agent.replay_buffer.add(obs, next_obs, actions_np, rewards, dones, infos)
+                    obs = next_obs
+                    if (step + 1) % 1000 == 0 or step == prefill_steps - 1:
+                        print(f"  [teacher] collected {step + 1}/{prefill_steps} steps")
+            obs = env.reset()
+            agent._last_obs = obs
+            agent.num_timesteps = 0
+            agent.learning_starts = max(0, agent.learning_starts - prefill_steps)
+            print("[INFO] Classical planner rollout complete. Replay buffer primed.")
 
     # Optionally load IL weights into SAC agent
     if args_cli.use_IL:
