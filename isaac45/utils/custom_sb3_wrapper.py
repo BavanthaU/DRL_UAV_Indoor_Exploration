@@ -116,7 +116,14 @@ class Sb3VecEnvWrapper(VecEnv):
 
     """
 
-    def __init__(self, env: ManagerBasedRLEnv | DirectRLEnv, lower_bound=None, upper_bound=None, discrete_action_space=False, num_action_vals=None):
+    def __init__(
+        self,
+        env: ManagerBasedRLEnv | DirectRLEnv,
+        lower_bound=None,
+        upper_bound=None,
+        discrete_action_space=False,
+        num_action_vals=None,
+    ):
         """Initialize the wrapper.
 
         Args:
@@ -158,6 +165,12 @@ class Sb3VecEnvWrapper(VecEnv):
         self._ep_rew_buf = torch.zeros(self.num_envs, device=self.sim_device)
         self._ep_len_buf = torch.zeros(self.num_envs, device=self.sim_device)
         self._occ_cells_buf = torch.zeros(self.num_envs, device=self.sim_device)
+        if isinstance(action_space, gym.spaces.Box):
+            self._action_low = torch.as_tensor(action_space.low, device=self.sim_device, dtype=torch.float32)
+            self._action_high = torch.as_tensor(action_space.high, device=self.sim_device, dtype=torch.float32)
+        else:
+            self._action_low = None
+            self._action_high = None
         
 
     def __str__(self):
@@ -228,6 +241,7 @@ class Sb3VecEnvWrapper(VecEnv):
         self.unwrapped.actions = actions
         
         self._async_actions = actions
+
 
     def step_wait(self) -> VecEnvStepReturn:  # noqa: D102
         # record step information
@@ -373,4 +387,3 @@ class Sb3VecEnvWrapper(VecEnv):
         # return list of dictionaries
         self.prev_occ_cells = self._occ_cells_buf[idx]
         return infos
-

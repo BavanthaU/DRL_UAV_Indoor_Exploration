@@ -163,3 +163,14 @@ Open the browser on your local PC and go to:
 http://localhost:6006
 ```
 A different port other than 6006 can be used, if that one is already in use. 
+
+## Changelog
+
+### 2025-03-31
+- Allow symmetric `[-1, 1]` velocity commands for drone SAC wrappers so policies can reverse or brake.
+- Swapped contact-sensor collision handling for ray-cast proximity rewards/terminations across drone exploration environments.
+- Added hierarchical frontier planner support (automatic subgoal selection, subgoal observations, and rewards) for autonomous exploration experiments.
+- Introduced frozen MobileNet feature extractor and `sb3_sac_mobilenet.yaml` experiment profile for lightweight pretrained vision backbones.
+- Added curiosity-based intrinsic reward derived from cell visit counts to reduce looping behaviour.
+- Added planner mode switches (heuristic/observe/rl) with frontier visualisations and subgoal statistics logged to W&B.
+- Added configurable map snapshot logging interval to periodically push occupancy/frontier overlays to W&B for debugging.

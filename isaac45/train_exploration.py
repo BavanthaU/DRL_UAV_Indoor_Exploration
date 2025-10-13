@@ -25,6 +25,18 @@ import sys
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train a drone for a RL task")
+parser.epilog = """Key switches:
+  --task                    Gym ID registered in RL_drone/__init__.py (e.g. Drone_SAC_convnextv2).
+  --num_envs                Number of Isaac environments simulated in parallel.
+  --max_iterations          Override hydra-configured rollout iterations (converted to SB3 timesteps).
+  --planner_mode            Frontier manager mode: heuristic | observe | assist | rl.
+  --manager_*               Frontier manager hyperparameters (lr/gamma/epsilon/max_candidates).
+  --map_snapshot_interval   Log map/frontier overlays every N steps (0 = only on episode end).
+  --use_IL / --IL_model_path Use behaviour-cloned weights to warm start the SAC policy.
+  --fill_replay_buffer      Ask the IL policy to pre-populate the replay buffer.
+  --buffer_path             Load an existing replay buffer pickle.
+  --livestream / --enable_cameras Isaac Sim rendering options (forwarded to AppLauncher).
+"""
 parser.add_argument("--num_envs", type=int, default=10, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default="Drone_SAC_IL", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
@@ -46,9 +58,7 @@ parser.add_argument("--manager_gamma", type=float, default=0.95, help="Discount 
 parser.add_argument("--manager_epsilon", type=float, default=0.1, help="Epsilon-greedy exploration for the frontier manager.")
 parser.add_argument("--planner_mode", choices=["heuristic", "observe", "assist", "rl"], default="heuristic", help="Frontier planner mode: 'heuristic' for classical, 'observe' to log heuristics, 'assist' to imitate while heuristics run, 'rl' to learn subgoals.")
 parser.add_argument("--manager_load_path", type=str, default=None, help="Path to a saved frontier manager checkpoint.")
-parser.add_argument("--test_global_planner", action="store_true", help="Force an initial frontier target so visualization works on tiny maps.")
-parser.add_argument("--teacher_local_planner", action="store_true", help="Warm-start with classical local planner rollouts.")
-parser.add_argument("--teacher_steps", type=int, default=10000, help="Number of transitions to collect from the classical local planner.")
+parser.add_argument("--map_snapshot_interval", type=int, default=0, help="Log map and frontier overlays every N steps (0 disables periodic snapshots).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -154,6 +164,7 @@ class WandbMetricsCallback(BaseCallback):
                 try:
                     map_dict = env_map.wandb_environment_map_dict
                     traj_dict = getattr(env_map, "wandb_drone_traj_dict", {})
+                    frontier_cache = None
                     logged = 0
                     for env_idx, grid in map_dict.items():
                         if grid is None or logged >= self._max_map_images:
@@ -168,11 +179,33 @@ class WandbMetricsCallback(BaseCallback):
                                 x, y = int(point[0]), int(point[1])
                                 if 0 <= x < arr.shape[0] and 0 <= y < arr.shape[1]:
                                     arr[x, y] = 3
+                        frontier_vis = None
+                        if hasattr(env_map, "frontier_snapshot"):
+                            frontier_vis = env_map.frontier_snapshot.get(env_idx, None)
+                        else:
+                            frontier_vis = None
+                        vis_np = None
+                        if frontier_vis is not None:
+                            vis_np = frontier_vis.detach().cpu().numpy().astype(np.uint8)
+                        elif hasattr(env_map, "current_frontier_mask"):
+                            if frontier_cache is None:
+                                frontier_cache = env_map.current_frontier_mask().detach().cpu().numpy().astype(np.uint8)
+                            vis_np = frontier_cache[env_idx]
+                        if vis_np is not None:
+                            arr = arr.copy()
+                            arr[vis_np == 1] = 4  # frontier candidates
+                            arr[vis_np == 2] = 5  # selected frontier
+                            arr[vis_np == 3] = 6  # drone marker
+                            if frontier_vis is not None:
+                                env_map.frontier_snapshot[env_idx] = None
                         palette = np.array([
                             [20, 20, 20],      # unknown
-                            [200, 200, 200],    # free space
-                            [240, 80, 80],      # obstacle
-                            [80, 160, 255],     # trajectory
+                            [200, 200, 200],   # free space
+                            [240, 80, 80],     # obstacle
+                            [80, 160, 255],    # trajectory
+                            [255, 215, 0],     # frontier candidate
+                            [80, 200, 120],    # selected frontier
+                            [255, 80, 80],     # drone marker
                         ], dtype=np.uint8)
                         color_img = palette[arr]
                         map_logs[f"maps/env_{env_idx}"] = color_img
@@ -187,38 +220,6 @@ class WandbMetricsCallback(BaseCallback):
                     import wandb
 
                     for key, arr in map_logs.items():
-                        log_payload[key] = wandb.Image(arr, caption=key)
-                except Exception:
-                    pass
-
-            frontier_logs = {}
-            if self._max_map_images > 0 and hasattr(env_map, "wandb_frontier_map_dict"):
-                try:
-                    frontier_dict = env_map.wandb_frontier_map_dict
-                    logged_frontiers = 0
-
-                    for env_idx, vis in frontier_dict.items():
-                        if vis is None or logged_frontiers >= self._max_map_images:
-                            continue
-                        arr = vis.detach().cpu().numpy().astype(np.uint8)
-                        palette = np.array([
-                            [20, 20, 20],      # background
-                            [255, 215, 0],      # frontier candidates
-                            [80, 200, 120],     # selected frontier
-                            [80, 160, 255],     # drone position
-                        ], dtype=np.uint8)
-                        color_img = palette[arr]
-                        frontier_logs[f"frontiers/env_{env_idx}"] = color_img
-                        env_map.frontier_snapshot[env_idx] = None
-                        logged_frontiers += 1
-                except Exception:
-                    frontier_logs = {}
-
-            if frontier_logs:
-                try:
-                    import wandb
-
-                    for key, arr in frontier_logs.items():
                         log_payload[key] = wandb.Image(arr, caption=key)
                 except Exception:
                     pass
@@ -253,7 +254,7 @@ from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
-from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager, ClassicalLocalPlanner, ClassicalPlannerConfig
+from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
 
 # Stable-Baselines3 tools
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -346,11 +347,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)
     env.unwrapped.env_map = env_model
     env_model.manager_mode = planner_mode
-    env_model.test_global_planner = args_cli.test_global_planner
-
-    teacher_planner = None
-    if args_cli.teacher_local_planner:
-        teacher_planner = ClassicalLocalPlanner(base_env, ClassicalPlannerConfig())
+    if hasattr(env_model, "map_snapshot_interval"):
+        env_model.map_snapshot_interval = max(0, int(args_cli.map_snapshot_interval))
 
     frontier_manager = None
     if manager_enabled and planner_mode != "heuristic":
@@ -405,26 +403,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
             agent = SAC(policy_arch, env, verbose=1, **agent_cfg)
     else:
         agent = SAC(policy_arch, env, verbose=1, **agent_cfg)
-
-    if args_cli.teacher_local_planner and teacher_planner is not None:
-        prefill_steps = max(0, args_cli.teacher_steps)
-        if prefill_steps > 0:
-            print(f"[INFO] Collecting {prefill_steps} steps from classical local planner for warm start.")
-            obs = env.reset()
-            with torch.no_grad():
-                for step in range(prefill_steps):
-                    actions_tensor = teacher_planner.compute_actions()
-                    actions_np = actions_tensor.detach().cpu().numpy().astype(np.float32)
-                    next_obs, rewards, dones, infos = env.step(actions_np)
-                    agent.replay_buffer.add(obs, next_obs, actions_np, rewards, dones, infos)
-                    obs = next_obs
-                    if (step + 1) % 1000 == 0 or step == prefill_steps - 1:
-                        print(f"  [teacher] collected {step + 1}/{prefill_steps} steps")
-            obs = env.reset()
-            agent._last_obs = obs
-            agent.num_timesteps = 0
-            agent.learning_starts = max(0, agent.learning_starts - prefill_steps)
-            print("[INFO] Classical planner rollout complete. Replay buffer primed.")
 
     # Optionally load IL weights into SAC agent
     if args_cli.use_IL:

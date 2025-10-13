@@ -21,7 +21,7 @@ parser.add_argument("--manager_rl", action="store_true", help="Enable RL frontie
 parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maximum frontier candidates considered by the manager during eval.")
 parser.add_argument("--planner_mode", choices=["heuristic", "observe", "assist", "rl"], default="heuristic", help="Frontier planner mode during evaluation.")
 parser.add_argument("--manager_load_path", type=str, default=None, help="Optional path to a frontier manager checkpoint for evaluation.")
-parser.add_argument("--test_global_planner", action="store_true", help="Force an initial frontier goal for visualization.")
+parser.add_argument("--map_snapshot_interval", type=int, default=0, help="Log map/frontier overlays every N steps (0 disables periodic snapshots).")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -119,7 +119,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     env_model = env_mapping.EnvironmentModelFOVTraversability(env.unwrapped.scene.num_envs, env.unwrapped.sim.device, env.unwrapped.scene.env_origins)
     env.unwrapped.env_map = env_model
     env_model.manager_mode = planner_mode
-    env_model.test_global_planner = args_cli.test_global_planner
+    if hasattr(env_model, "map_snapshot_interval"):
+        env_model.map_snapshot_interval = max(0, int(args_cli.map_snapshot_interval))
 
     frontier_manager = None
     if manager_enabled and planner_mode != "heuristic":

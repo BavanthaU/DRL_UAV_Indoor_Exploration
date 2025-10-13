@@ -21,7 +21,7 @@ parser.add_argument("--manager_rl", action="store_true", help="Use the RL fronti
 parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maximum frontier candidates passed to the manager in replay mode.")
 parser.add_argument("--planner_mode", choices=["heuristic", "observe", "assist", "rl"], default="heuristic", help="Frontier planner mode during replay.")
 parser.add_argument("--manager_load_path", type=str, default=None, help="Optional path to a frontier manager checkpoint for replay.")
-parser.add_argument("--test_global_planner", action="store_true", help="Force an initial frontier goal for visualization during replay.")
+parser.add_argument("--map_snapshot_interval", type=int, default=0, help="Log map/frontier overlays every N steps (0 disables periodic snapshots).")
 parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster min distances each step.")
 parser.add_argument("--ray_debug_hits", action="store_true", help="Additionally print raw ray hit points (env 0).")
 # pass-through common AppLauncher args (device, headless, enable_cameras, etc.)
@@ -89,7 +89,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     )
     base_env.env_map = env_model
     env_model.manager_mode = planner_mode
-    env_model.test_global_planner = args_cli.test_global_planner
+    if hasattr(env_model, "map_snapshot_interval"):
+        env_model.map_snapshot_interval = max(0, int(args_cli.map_snapshot_interval))
     if manager_enabled and planner_mode != "heuristic":
         device = getattr(base_env, "device", getattr(base_env.sim, "device", "cpu"))
         manager = FrontierRLManager(

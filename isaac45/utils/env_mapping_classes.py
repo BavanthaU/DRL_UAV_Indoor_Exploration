@@ -80,9 +80,8 @@ class BasicEnvironmentModel:
         self.curiosity_beta = 0.1
         self.frontier_snapshot = {i: None for i in range(self.num_envs)}
         self.manager_mode = "heuristic"
-        self.test_global_planner = False
-        self._test_map_interval = 100
-        self._last_test_map_step = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.map_snapshot_interval = 0
+        self._last_snapshot_step = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
 
         # For monitoring progress in RL
         self.count = torch.zeros(self.num_envs, dtype=torch.int, device = self.device)
@@ -315,15 +314,15 @@ class BasicEnvironmentModel:
         self._episode_steps += 1
         self._update_subgoals(drone_pose)
         self._update_curiosity(drone_pose[:, :3])
-        if getattr(self, "test_global_planner", False):
-            self._initialize_test_frontier(drone_pose[:, :3])
-            self._maybe_log_test_map()
+        self._maybe_log_map_snapshots()
 
 
     def reset_environment_map(self, idx_reset):
         self._environment_map[idx_reset] = torch.zeros((self._grid_num[0], self._grid_num[1]), device = self.device, dtype=torch.uint8)
         self._old_grid_area [idx_reset] = 0
         self._episode_steps [idx_reset] = 0
+        if hasattr(self, "_last_snapshot_step"):
+            self._last_snapshot_step[idx_reset] = 0
         self.count[idx_reset] +=1 
         self.subgoal_active[idx_reset] = False
         self.prev_subgoal_distance[idx_reset] = 0.0
@@ -361,6 +360,15 @@ class BasicEnvironmentModel:
         free = (self._environment_map == 1).float().unsqueeze(1)
         neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
         frontier_mask_raw = (neighbor_unknown > 0.0) & (free > 0.0)
+        boundary_mask = torch.zeros_like(frontier_mask_raw)
+        boundary_mask[:, :, 0, :] = free[:, :, 0, :]
+        boundary_mask[:, :, -1, :] = free[:, :, -1, :]
+        boundary_mask[:, :, :, 0] = free[:, :, :, 0]
+        boundary_mask[:, :, :, -1] = free[:, :, :, -1]
+        frontier_mask_raw = frontier_mask_raw | boundary_mask
+        neighbor_free = F.conv2d(free, self._frontier_kernel, padding=1)
+        open_end_raw = (neighbor_free > 0.0) & (unknown > 0.0)
+        frontier_mask_raw = frontier_mask_raw | open_end_raw
         gain_raw = F.conv2d(unknown, self._gain_kernel, padding=2)
 
         if self.subgoal_active.any():
@@ -417,6 +425,15 @@ class BasicEnvironmentModel:
             free = (self._environment_map == 1).float().unsqueeze(1)
             neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
             frontier_mask = (neighbor_unknown > 0.0) & (free > 0.0)
+            boundary_mask = torch.zeros_like(frontier_mask)
+            boundary_mask[:, :, 0, :] = free[:, :, 0, :]
+            boundary_mask[:, :, -1, :] = free[:, :, -1, :]
+            boundary_mask[:, :, :, 0] = free[:, :, :, 0]
+            boundary_mask[:, :, :, -1] = free[:, :, :, -1]
+            frontier_mask = frontier_mask | boundary_mask
+            neighbor_free = F.conv2d(free, self._frontier_kernel, padding=1)
+            open_end_mask = (neighbor_free > 0.0) & (unknown > 0.0)
+            frontier_mask = frontier_mask | open_end_mask
             gain = F.conv2d(unknown, self._gain_kernel, padding=2)
         assert gain is not None and frontier_mask is not None
         if not frontier_mask.any():
@@ -510,34 +527,6 @@ class BasicEnvironmentModel:
         if 0 <= gx < vis.shape[0] and 0 <= gy < vis.shape[1]:
             vis[gx, gy] = 3
         self.frontier_snapshot[env_idx] = vis
-
-    def _initialize_test_frontier(self, drone_pos: torch.Tensor) -> None:
-        if not getattr(self, "test_global_planner", False):
-            self._last_test_map_step = torch.zeros_like(self._last_test_map_step)
-            return
-        for env_idx in range(self.num_envs):
-            if self.subgoal_active[env_idx]:
-                continue
-            grid_loc = self.drone_grid_loc[env_idx]
-            if torch.any(grid_loc < 0):
-                continue
-            target = grid_loc + torch.tensor([0, 1], device=self.device)
-            target[0] = torch.clamp(target[0], 0, self._grid_num[0] - 1)
-            target[1] = torch.clamp(target[1], 0, self._grid_num[1] - 1)
-            world_x = self._grid_orig_tensor[0] + (target[0].float() + 0.5) * self._grid_size
-            world_y = self._grid_orig_tensor[1] + (target[1].float() + 0.5) * self._grid_size
-            self.current_subgoal_world[env_idx, 0] = world_x
-            self.current_subgoal_world[env_idx, 1] = world_y
-            self.current_subgoal_world[env_idx, 2] = self.subgoal_height
-            self.subgoal_active[env_idx] = True
-            self.prev_subgoal_distance[env_idx] = torch.linalg.norm(
-                self.current_subgoal_world[env_idx, :2] - drone_pos[env_idx, :2]
-            )
-            mask = torch.zeros_like(self._environment_map[env_idx], dtype=torch.bool)
-            mask[int(target[0].item()), int(target[1].item())] = True
-            coords = torch.tensor([[int(target[0].item()), int(target[1].item())]], device=self.device)
-            self._store_frontier_snapshot(env_idx, mask, coords, 0)
-        self.test_global_planner = False
 
     def _update_curiosity(self, drone_pos: torch.Tensor):
         grid_locs = self.drone_grid_loc.clone()
@@ -881,24 +870,6 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
 
         new_grid_area = self.update_gridmap_from_PointCloud(drone_pose)  # tensor of integers of size (num_envs)
 
-        if getattr(self, "test_global_planner", False):
-            interval = getattr(self, "_test_map_interval", 1000)
-            if interval > 0:
-                current_step = int(self._episode_steps[0].item()) if self._episode_steps.numel() > 0 else 0
-                if current_step % interval == 0:
-                    env_idx = 0
-                    self.environment_map_ended_episodes[env_idx] = (
-                        self._environment_map[env_idx].detach().to("cpu").clone()
-                    )
-                    if hasattr(self, "drone_trajectory"):
-                        self.drone_trajectory_ended_episodes[env_idx] = self.drone_trajectory[env_idx].clone()
-                    frontier_vis = self.frontier_snapshot.get(env_idx)
-                    if isinstance(frontier_vis, torch.Tensor):
-                        self.frontier_snapshot[env_idx] = frontier_vis.clone()
-                    else:
-                        self.frontier_snapshot[env_idx] = frontier_vis
-                    self._last_test_map_step[env_idx] = self._episode_steps[env_idx]
-        
         self.area_diff = new_grid_area - self._old_grid_area         # tensor of integers of size (num_envs)
         self.area_diff[self._episode_steps == 0]= 0                  # Force the fist step to give area_diff =0. Otherwise the reward will be too big (everything is seen for the first time)
         assert torch.all(self.area_diff > -0.001), f"Unexpected area differences: {self.area_diff}. All values must be >= -0.001."
@@ -908,6 +879,8 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
 
         for i in range(self.num_envs):
             self.drone_trajectory[i] = torch.cat((self.drone_trajectory[i], self.drone_grid_loc[i].unsqueeze(0)), dim=0)
+
+        self._maybe_log_map_snapshots()
 
     def reset_environment_map(self, idx_reset):     # idx_reset: tensor of shape (num_envs) with 0/1 for the environments that don't/ do need to be reset.
         
@@ -935,3 +908,38 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         self.current_subgoal_world[idx_reset] = 0.0
 
         return
+
+    def _maybe_log_map_snapshots(self) -> None:
+        interval = int(getattr(self, "map_snapshot_interval", 0))
+        if interval <= 0:
+            return
+        for env_idx in range(self.num_envs):
+            step_count = int(self._episode_steps[env_idx].item())
+            last_log = int(self._last_snapshot_step[env_idx].item())
+            if step_count - last_log < interval:
+                continue
+            self.environment_map_ended_episodes[env_idx] = self._environment_map[env_idx].detach().to("cpu").clone()
+            if hasattr(self, "drone_trajectory"):
+                self.drone_trajectory_ended_episodes[env_idx] = self.drone_trajectory[env_idx].clone()
+            frontier_vis = self.frontier_snapshot.get(env_idx, None)
+            if isinstance(frontier_vis, torch.Tensor):
+                self.frontier_snapshot[env_idx] = frontier_vis.clone()
+            else:
+                self.frontier_snapshot[env_idx] = frontier_vis
+            self._last_snapshot_step[env_idx] = self._episode_steps[env_idx]
+
+    def current_frontier_mask(self) -> torch.Tensor:
+        unknown = (self._environment_map == 0).float().unsqueeze(1)
+        free = (self._environment_map == 1).float().unsqueeze(1)
+        neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
+        frontier_mask = (neighbor_unknown > 0.0) & (free > 0.0)
+        neighbor_free = F.conv2d(free, self._frontier_kernel, padding=1)
+        open_end_mask = (neighbor_free > 0.0) & (unknown > 0.0)
+        frontier_mask = frontier_mask | open_end_mask
+        boundary_mask = torch.zeros_like(frontier_mask)
+        boundary_mask[:, :, 0, :] = free[:, :, 0, :]
+        boundary_mask[:, :, -1, :] = free[:, :, -1, :]
+        boundary_mask[:, :, :, 0] = free[:, :, :, 0]
+        boundary_mask[:, :, :, -1] = free[:, :, :, -1]
+        frontier_mask = frontier_mask | boundary_mask
+        return frontier_mask.squeeze(1).bool()
