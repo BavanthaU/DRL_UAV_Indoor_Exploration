@@ -165,6 +165,7 @@ class WandbMetricsCallback(BaseCallback):
                     map_dict = env_map.wandb_environment_map_dict
                     traj_dict = getattr(env_map, "wandb_drone_traj_dict", {})
                     frontier_cache = None
+                    unknown_cache_np = None
                     logged = 0
                     for env_idx, grid in map_dict.items():
                         if grid is None or logged >= self._max_map_images:
@@ -179,25 +180,35 @@ class WandbMetricsCallback(BaseCallback):
                                 x, y = int(point[0]), int(point[1])
                                 if 0 <= x < arr.shape[0] and 0 <= y < arr.shape[1]:
                                     arr[x, y] = 3
-                        frontier_vis = None
-                        if hasattr(env_map, "frontier_snapshot"):
-                            frontier_vis = env_map.frontier_snapshot.get(env_idx, None)
-                        else:
-                            frontier_vis = None
                         vis_np = None
+                        unknown_np = None
+                        frontier_vis = env_map.frontier_snapshot.get(env_idx) if hasattr(env_map, "frontier_snapshot") else None
                         if frontier_vis is not None:
                             vis_np = frontier_vis.detach().cpu().numpy().astype(np.uint8)
+                            if hasattr(env_map, "frontier_unknown_snapshot"):
+                                unk_snapshot = env_map.frontier_unknown_snapshot.get(env_idx)
+                                if unk_snapshot is not None:
+                                    unknown_np = unk_snapshot.detach().cpu().numpy().astype(np.uint8)
                         elif hasattr(env_map, "current_frontier_mask"):
                             if frontier_cache is None:
-                                frontier_cache = env_map.current_frontier_mask().detach().cpu().numpy().astype(np.uint8)
+                                candidate_cache, unknown_cache = env_map.current_frontier_mask(include_unknown=True)
+                                frontier_cache = candidate_cache.detach().cpu().numpy().astype(np.uint8)
+                                unknown_cache_np = unknown_cache.detach().cpu().numpy().astype(np.uint8)
                             vis_np = frontier_cache[env_idx]
+                            if unknown_cache_np is not None:
+                                unknown_np = unknown_cache_np[env_idx]
                         if vis_np is not None:
                             arr = arr.copy()
                             arr[vis_np == 1] = 4  # frontier candidates
                             arr[vis_np == 2] = 5  # selected frontier
                             arr[vis_np == 3] = 6  # drone marker
+                            arr[vis_np == 4] = 7  # unknown frontier cells
+                            if unknown_np is not None:
+                                arr[unknown_np == 1] = np.where(arr[unknown_np == 1] == 4, arr[unknown_np == 1], 7)
                             if frontier_vis is not None:
                                 env_map.frontier_snapshot[env_idx] = None
+                                if hasattr(env_map, "frontier_unknown_snapshot"):
+                                    env_map.frontier_unknown_snapshot[env_idx] = None
                         palette = np.array([
                             [20, 20, 20],      # unknown
                             [200, 200, 200],   # free space
@@ -206,6 +217,7 @@ class WandbMetricsCallback(BaseCallback):
                             [255, 215, 0],     # frontier candidate
                             [80, 200, 120],    # selected frontier
                             [255, 80, 80],     # drone marker
+                            [255, 245, 150],   # unknown frontier cells
                         ], dtype=np.uint8)
                         color_img = palette[arr]
                         map_logs[f"maps/env_{env_idx}"] = color_img

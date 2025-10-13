@@ -79,6 +79,7 @@ class BasicEnvironmentModel:
         self.curiosity_reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.curiosity_beta = 0.1
         self.frontier_snapshot = {i: None for i in range(self.num_envs)}
+        self.frontier_unknown_snapshot = {i: None for i in range(self.num_envs)}
         self.manager_mode = "heuristic"
         self.map_snapshot_interval = 0
         self._last_snapshot_step = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
@@ -109,6 +110,22 @@ class BasicEnvironmentModel:
         self.manager_mode = mode
         if hasattr(manager, "max_candidates"):
             self.manager_max_candidates = int(manager.max_candidates)
+
+    def _compute_frontier_fields(self):
+        unknown = (self._environment_map == 0).float().unsqueeze(1)
+        free = (self._environment_map == 1).float().unsqueeze(1)
+        neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
+        frontier_free = (neighbor_unknown > 0.0) & (free > 0.0)
+        boundary_mask = torch.zeros_like(frontier_free)
+        boundary_mask[:, :, 0, :] = free[:, :, 0, :]
+        boundary_mask[:, :, -1, :] = free[:, :, -1, :]
+        boundary_mask[:, :, :, 0] = free[:, :, :, 0]
+        boundary_mask[:, :, :, -1] = free[:, :, :, -1]
+        candidate_mask = frontier_free | boundary_mask
+        neighbor_free = F.conv2d(free, self._frontier_kernel, padding=1)
+        unknown_mask = (neighbor_free > 0.0) & (unknown > 0.0)
+        gain = F.conv2d(unknown, self._gain_kernel, padding=2)
+        return candidate_mask, unknown_mask, gain
 
         # Frontier planning support
         self.frontier_tolerance = 1.5
@@ -261,6 +278,8 @@ class BasicEnvironmentModel:
         # Update the grid size and environment map
         self._grid_num = (new_grid_size_x, new_grid_size_y)
         self._environment_map = new_grid
+        self.frontier_snapshot = {i: None for i in range(self.num_envs)}
+        self.frontier_unknown_snapshot = {i: None for i in range(self.num_envs)}
 
         return shift_x, shift_y
           
@@ -356,20 +375,7 @@ class BasicEnvironmentModel:
             current_dist = torch.linalg.norm(self.current_subgoal_world[:, :2] - drone_pos[:, :2], dim=1)
             need_new = (~self.subgoal_active) | (current_dist <= self.frontier_tolerance)
             self.prev_subgoal_distance[~need_new & self.subgoal_active] = current_dist[~need_new & self.subgoal_active]
-        unknown = (self._environment_map == 0).float().unsqueeze(1)
-        free = (self._environment_map == 1).float().unsqueeze(1)
-        neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
-        frontier_mask_raw = (neighbor_unknown > 0.0) & (free > 0.0)
-        boundary_mask = torch.zeros_like(frontier_mask_raw)
-        boundary_mask[:, :, 0, :] = free[:, :, 0, :]
-        boundary_mask[:, :, -1, :] = free[:, :, -1, :]
-        boundary_mask[:, :, :, 0] = free[:, :, :, 0]
-        boundary_mask[:, :, :, -1] = free[:, :, :, -1]
-        frontier_mask_raw = frontier_mask_raw | boundary_mask
-        neighbor_free = F.conv2d(free, self._frontier_kernel, padding=1)
-        open_end_raw = (neighbor_free > 0.0) & (unknown > 0.0)
-        frontier_mask_raw = frontier_mask_raw | open_end_raw
-        gain_raw = F.conv2d(unknown, self._gain_kernel, padding=2)
+        frontier_mask_raw, unknown_mask_raw, gain_raw = self._compute_frontier_fields()
 
         if self.subgoal_active.any():
             subgoal_coords = ((self.current_subgoal_world[:, :2] - self._grid_orig_tensor) / self._grid_size).floor().to(torch.long)
@@ -403,8 +409,9 @@ class BasicEnvironmentModel:
                 drone_pos,
                 need_new,
                 coverage_ratio,
-                frontier_mask=frontier_mask_raw,
+                candidate_mask=frontier_mask_raw,
                 gain=gain_raw,
+                unknown_mask=unknown_mask_raw,
             )
         if self.manager is not None and getattr(self.manager, "training", False):
             self.manager.update()
@@ -414,60 +421,52 @@ class BasicEnvironmentModel:
         drone_pos: torch.Tensor,
         mask: torch.Tensor,
         coverage_ratio: torch.Tensor,
-        frontier_mask: torch.Tensor | None = None,
+        candidate_mask: torch.Tensor | None = None,
         gain: torch.Tensor | None = None,
+        unknown_mask: torch.Tensor | None = None,
     ):
         if mask.ndim == 0:
             mask = mask.unsqueeze(0)
-        recompute = frontier_mask is None or gain is None
+        recompute = candidate_mask is None or gain is None
         if recompute:
-            unknown = (self._environment_map == 0).float().unsqueeze(1)
-            free = (self._environment_map == 1).float().unsqueeze(1)
-            neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
-            frontier_mask = (neighbor_unknown > 0.0) & (free > 0.0)
-            boundary_mask = torch.zeros_like(frontier_mask)
-            boundary_mask[:, :, 0, :] = free[:, :, 0, :]
-            boundary_mask[:, :, -1, :] = free[:, :, -1, :]
-            boundary_mask[:, :, :, 0] = free[:, :, :, 0]
-            boundary_mask[:, :, :, -1] = free[:, :, :, -1]
-            frontier_mask = frontier_mask | boundary_mask
-            neighbor_free = F.conv2d(free, self._frontier_kernel, padding=1)
-            open_end_mask = (neighbor_free > 0.0) & (unknown > 0.0)
-            frontier_mask = frontier_mask | open_end_mask
-            gain = F.conv2d(unknown, self._gain_kernel, padding=2)
-        assert gain is not None and frontier_mask is not None
-        if not frontier_mask.any():
+            candidate_mask, unknown_mask, gain = self._compute_frontier_fields()
+        assert gain is not None and candidate_mask is not None
+        if not candidate_mask.any():
             self.subgoal_active[mask] = False
             return
         gain = gain.squeeze(1)
-        frontier_mask = frontier_mask.squeeze(1)
+        candidate_mask = candidate_mask.squeeze(1)
+        if unknown_mask is not None:
+            unknown_mask = unknown_mask.squeeze(1)
         centers_x = self._cell_centers_x.unsqueeze(0)
         centers_y = self._cell_centers_y.unsqueeze(0)
         dx = centers_x - drone_pos[:, 0].unsqueeze(1).unsqueeze(2)
         dy = centers_y - drone_pos[:, 1].unsqueeze(1).unsqueeze(2)
         distances = torch.sqrt(dx * dx + dy * dy + 1e-6)
         scores = gain - self.frontier_distance_weight * distances
-        scores = scores.masked_fill(~frontier_mask, float("-inf"))
+        scores = scores.masked_fill(~candidate_mask, float("-inf"))
 
         env_ids = torch.nonzero(mask, as_tuple=False).squeeze(-1)
         if env_ids.ndim == 0 and env_ids.numel() > 0:
             env_ids = env_ids.unsqueeze(0)
 
         for env_idx in env_ids.tolist():
-            candidate_mask = frontier_mask[env_idx]
-            if not candidate_mask.any():
+            candidate_mask_env = candidate_mask[env_idx]
+            if not candidate_mask_env.any():
                 self.subgoal_active[env_idx] = False
                 self.frontier_snapshot[env_idx] = None
+                self.frontier_unknown_snapshot[env_idx] = None
                 continue
-            scores_env = scores[env_idx][candidate_mask]
+            scores_env = scores[env_idx][candidate_mask_env]
             valid_count = int(torch.sum(torch.isfinite(scores_env)).item())
             if valid_count == 0:
                 self.subgoal_active[env_idx] = False
                 self.frontier_snapshot[env_idx] = None
+                self.frontier_unknown_snapshot[env_idx] = None
                 continue
-            coords = candidate_mask.nonzero(as_tuple=False)
-            gains_env = gain[env_idx][candidate_mask]
-            distances_env = distances[env_idx][candidate_mask]
+            coords = candidate_mask_env.nonzero(as_tuple=False)
+            gains_env = gain[env_idx][candidate_mask_env]
+            distances_env = distances[env_idx][candidate_mask_env]
             world_x = self._cell_centers_x[coords[:, 0], coords[:, 1]]
             world_y = self._cell_centers_y[coords[:, 0], coords[:, 1]]
             headings = torch.atan2(world_y - drone_pos[env_idx, 1], world_x - drone_pos[env_idx, 0])
@@ -506,7 +505,10 @@ class BasicEnvironmentModel:
             self.subgoal_active[env_idx] = True
             new_dist = torch.linalg.norm(self.current_subgoal_world[env_idx, :2] - drone_pos[env_idx, :2])
             self.prev_subgoal_distance[env_idx] = new_dist
-            self._store_frontier_snapshot(env_idx, candidate_mask, coords_ordered, choice)
+            unknown_env = None
+            if unknown_mask is not None:
+                unknown_env = unknown_mask[env_idx]
+            self._store_frontier_snapshot(env_idx, candidate_mask_env, coords_ordered, choice, unknown_mask_env=unknown_env)
 
         inactive = mask & (~self.subgoal_active)
         if inactive.any():
@@ -514,19 +516,41 @@ class BasicEnvironmentModel:
             for idx in torch.nonzero(inactive, as_tuple=False).squeeze(-1).tolist():
                 self.frontier_snapshot[idx] = None
 
-    def _store_frontier_snapshot(self, env_idx: int, frontier_mask_env: torch.Tensor, coords_ordered: torch.Tensor, choice_idx: int) -> None:
-        vis = torch.zeros_like(frontier_mask_env, dtype=torch.uint8).cpu()
-        mask_cpu = frontier_mask_env.cpu()
+    def _store_frontier_snapshot(
+        self,
+        env_idx: int,
+        candidate_mask_env: torch.Tensor,
+        coords_ordered: torch.Tensor | None,
+        choice_idx: int | None,
+        unknown_mask_env: torch.Tensor | None = None,
+        selected_cell: tuple[int, int] | None = None,
+    ) -> None:
+        mask_2d = candidate_mask_env.squeeze()
+        vis = torch.zeros_like(mask_2d, dtype=torch.uint8).cpu()
+        mask_cpu = mask_2d.to(torch.bool).cpu()
         vis[mask_cpu] = 1
+        if unknown_mask_env is not None:
+            unknown_cpu = unknown_mask_env.squeeze().to(torch.bool).cpu()
+            vis_unknown = vis[unknown_cpu]
+            replacement = torch.full_like(vis_unknown, 4)
+            vis[unknown_cpu] = torch.where(vis_unknown > 0, vis_unknown, replacement)
         coords_cpu = coords_ordered.cpu() if coords_ordered is not None else None
-        if coords_cpu is not None and coords_cpu.numel() > 0 and 0 <= choice_idx < coords_cpu.shape[0]:
+        if coords_cpu is not None and choice_idx is not None and coords_cpu.numel() > 0 and 0 <= choice_idx < coords_cpu.shape[0]:
             cx, cy = coords_cpu[choice_idx].tolist()
             vis[int(cx), int(cy)] = 2
+        elif selected_cell is not None:
+            cx, cy = selected_cell
+            if 0 <= cx < vis.shape[0] and 0 <= cy < vis.shape[1]:
+                vis[cx, cy] = 2
         drone_cell = self.drone_grid_loc[env_idx]
         gx, gy = int(drone_cell[0].item()), int(drone_cell[1].item())
         if 0 <= gx < vis.shape[0] and 0 <= gy < vis.shape[1]:
             vis[gx, gy] = 3
         self.frontier_snapshot[env_idx] = vis
+        if unknown_mask_env is not None:
+            self.frontier_unknown_snapshot[env_idx] = unknown_mask_env.squeeze().to(torch.bool).cpu()
+        else:
+            self.frontier_unknown_snapshot[env_idx] = None
 
     def _update_curiosity(self, drone_pos: torch.Tensor):
         grid_locs = self.drone_grid_loc.clone()
@@ -896,6 +920,8 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
 
             self.environment_map_ended_episodes[idx.item()] = map
             self.drone_trajectory_ended_episodes[idx.item()] = self.drone_trajectory[idx]
+            self.frontier_snapshot[idx.item()] = None
+            self.frontier_unknown_snapshot[idx.item()] = None
 
         self._environment_map[idx_reset] = torch.zeros((self._grid_num[0], self._grid_num[1]), device = self.device, dtype=torch.uint8)
         self._old_grid_area [idx_reset] = 0
@@ -913,6 +939,7 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         interval = int(getattr(self, "map_snapshot_interval", 0))
         if interval <= 0:
             return
+        candidate_mask, unknown_mask, _ = self._compute_frontier_fields()
         for env_idx in range(self.num_envs):
             step_count = int(self._episode_steps[env_idx].item())
             last_log = int(self._last_snapshot_step[env_idx].item())
@@ -921,25 +948,27 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
             self.environment_map_ended_episodes[env_idx] = self._environment_map[env_idx].detach().to("cpu").clone()
             if hasattr(self, "drone_trajectory"):
                 self.drone_trajectory_ended_episodes[env_idx] = self.drone_trajectory[env_idx].clone()
-            frontier_vis = self.frontier_snapshot.get(env_idx, None)
-            if isinstance(frontier_vis, torch.Tensor):
-                self.frontier_snapshot[env_idx] = frontier_vis.clone()
-            else:
-                self.frontier_snapshot[env_idx] = frontier_vis
+            selected_cell = None
+            if self.subgoal_active[env_idx]:
+                subgoal = self.current_subgoal_world[env_idx, :2]
+                grid_coords = ((subgoal - self._grid_orig_tensor) / self._grid_size).floor().to(torch.long)
+                sx, sy = int(grid_coords[0].item()), int(grid_coords[1].item())
+                if 0 <= sx < self._grid_num[0] and 0 <= sy < self._grid_num[1]:
+                    selected_cell = (sx, sy)
+            self._store_frontier_snapshot(
+                env_idx,
+                candidate_mask[env_idx].squeeze(0),
+                coords_ordered=None,
+                choice_idx=None,
+                unknown_mask_env=unknown_mask[env_idx].squeeze(0),
+                selected_cell=selected_cell,
+            )
             self._last_snapshot_step[env_idx] = self._episode_steps[env_idx]
 
-    def current_frontier_mask(self) -> torch.Tensor:
-        unknown = (self._environment_map == 0).float().unsqueeze(1)
-        free = (self._environment_map == 1).float().unsqueeze(1)
-        neighbor_unknown = F.conv2d(unknown, self._frontier_kernel, padding=1)
-        frontier_mask = (neighbor_unknown > 0.0) & (free > 0.0)
-        neighbor_free = F.conv2d(free, self._frontier_kernel, padding=1)
-        open_end_mask = (neighbor_free > 0.0) & (unknown > 0.0)
-        frontier_mask = frontier_mask | open_end_mask
-        boundary_mask = torch.zeros_like(frontier_mask)
-        boundary_mask[:, :, 0, :] = free[:, :, 0, :]
-        boundary_mask[:, :, -1, :] = free[:, :, -1, :]
-        boundary_mask[:, :, :, 0] = free[:, :, :, 0]
-        boundary_mask[:, :, :, -1] = free[:, :, :, -1]
-        frontier_mask = frontier_mask | boundary_mask
-        return frontier_mask.squeeze(1).bool()
+    def current_frontier_mask(self, include_unknown: bool = False):
+        candidate_mask, unknown_mask, _ = self._compute_frontier_fields()
+        candidate_mask = candidate_mask.squeeze(1).bool()
+        unknown_mask = unknown_mask.squeeze(1).bool()
+        if include_unknown:
+            return candidate_mask, unknown_mask
+        return candidate_mask
