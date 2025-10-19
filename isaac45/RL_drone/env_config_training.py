@@ -148,7 +148,7 @@ class RewardsCfg:
     # Reward for area coverage, each new cell found in occupancy map 
     explore = RewTerm(
         func=mdp.rewards.area_coverage,
-        weight=0.1,
+        weight=0.5,
     )
 
     # # Penalty for approaching obstacles detected via ray-cast
@@ -165,17 +165,17 @@ class RewardsCfg:
     # )
     collision_penalty = RewTerm(
         func=mdp.rewards.check_collision_single_contact_sensor,
-        weight=1.0,
+        weight=2.0,
         params={"M": -10.0, "N": 0.0, "force_threshold": 0.1},
     )
     subgoal_progress = RewTerm(
         func=mdp.rewards.subgoal_progress_reward,
-        weight=1.0,
+        weight=0.2,
         params={"progress_weight": 0.5, "reach_bonus": 5.0, "tolerance": 1.5},
     )
     curiosity = RewTerm(
         func=mdp.rewards.curiosity_intrinsic_reward,
-        weight=0.1,
+        weight=0.4,
     )
     
     # Reward for finishing exploration
@@ -198,7 +198,7 @@ class RewardsCfg:
     # )
 
     # Penalty for staying idle
-    idle_behavior = RewTerm(func=mdp.rewards.penalize_idle_behavior, weight = 1, params={"idle_penalty":-0.01, "motion_threshold":0.10})
+    idle_behavior = RewTerm(func=mdp.rewards.penalize_idle_behavior, weight = 1.0, params={"idle_penalty":-0.05, "motion_threshold":0.10})
 
 
 

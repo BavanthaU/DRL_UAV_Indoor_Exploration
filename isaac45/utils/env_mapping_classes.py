@@ -17,6 +17,7 @@ import kornia.morphology as km
 import kornia.contrib as kc
 import math
 import numpy as np
+from collections import deque
 from scipy.spatial.transform import Rotation
 
 import matplotlib.pyplot as plt
@@ -103,6 +104,9 @@ class BasicEnvironmentModel:
         self.manager_max_candidates = 8
         self.subgoal_reward_accum = torch.zeros(self.num_envs, device=self.device)
         self.subgoal_steps = torch.zeros(self.num_envs, device=self.device)
+        self.min_subgoal_steps_tolerance = 2
+        self.area_diff_reward_scale = 5.0
+        self.area_diff_reward = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
 
     def register_manager(self, manager, mode: str = "rl") -> None:
         """Attach a frontier manager that will select subgoals."""
@@ -147,7 +151,7 @@ class BasicEnvironmentModel:
     
     @property
     def reward_area_difference(self) -> torch.Tensor:
-        return self.area_diff
+        return self.area_diff_reward
     
     @property
     def drone_loc_in_gridmap(self) -> torch.Tensor:
@@ -275,11 +279,21 @@ class BasicEnvironmentModel:
         # Copy old grid values into the new grid, shifted if necessary
         new_grid[:, shift_x:shift_x + self._grid_num[0], shift_y:shift_y + self._grid_num[1]] = self._environment_map
 
+        new_visitation = torch.zeros((self.num_envs, new_grid_size_x, new_grid_size_y),
+                                     device=self.device,
+                                     dtype=self.visitation_counts.dtype)
+        new_visitation[:, shift_x:shift_x + self._grid_num[0], shift_y:shift_y + self._grid_num[1]] = self.visitation_counts
+
         # Update the grid size and environment map
         self._grid_num = (new_grid_size_x, new_grid_size_y)
         self._environment_map = new_grid
+        self.visitation_counts = new_visitation
         self.frontier_snapshot = {i: None for i in range(self.num_envs)}
         self.frontier_unknown_snapshot = {i: None for i in range(self.num_envs)}
+
+        grid_x = (torch.arange(self._grid_num[0], device=self.device, dtype=torch.float32) + 0.5) * self._grid_size + self._grid_orig_tensor[0]
+        grid_y = (torch.arange(self._grid_num[1], device=self.device, dtype=torch.float32) + 0.5) * self._grid_size + self._grid_orig_tensor[1]
+        self._cell_centers_x, self._cell_centers_y = torch.meshgrid(grid_x, grid_y, indexing="ij")
 
         return shift_x, shift_y
           
@@ -345,6 +359,7 @@ class BasicEnvironmentModel:
         self.count[idx_reset] +=1 
         self.subgoal_active[idx_reset] = False
         self.prev_subgoal_distance[idx_reset] = 0.0
+        self.area_diff_reward[idx_reset] = 0.0
         if self.manager is not None:
             env_ids = torch.nonzero(idx_reset, as_tuple=False).squeeze(-1)
             if env_ids.ndim == 0 and env_ids.numel() > 0:
@@ -366,19 +381,23 @@ class BasicEnvironmentModel:
     def _update_subgoals(self, drone_pose: torch.Tensor):
         if self._environment_map is None:
             return
-        self.subgoal_reward_accum += self.area_diff.to(torch.float32)
+        self.subgoal_reward_accum += self.area_diff_reward
         self.subgoal_steps += 1
-        drone_pos = drone_pose[:, :3]
+        drone_pos_world = drone_pose[:, :3]
+        frontier_mask_raw, unknown_mask_raw, gain_raw = self._compute_frontier_fields()
+        still_frontier = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        reach_mask = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
         if not self.subgoal_active.any():
             need_new = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
         else:
-            current_dist = torch.linalg.norm(self.current_subgoal_world[:, :2] - drone_pos[:, :2], dim=1)
-            need_new = (~self.subgoal_active) | (current_dist <= self.frontier_tolerance)
-            self.prev_subgoal_distance[~need_new & self.subgoal_active] = current_dist[~need_new & self.subgoal_active]
-        frontier_mask_raw, unknown_mask_raw, gain_raw = self._compute_frontier_fields()
+            current_dist = torch.linalg.norm(self.current_subgoal_world[:, :2] - drone_pos_world[:, :2], dim=1)
+            within_tolerance = current_dist <= self.frontier_tolerance
+            enough_steps = self.subgoal_steps > self.min_subgoal_steps_tolerance
+            need_new = (~self.subgoal_active).clone()
 
-        if self.subgoal_active.any():
-            subgoal_coords = ((self.current_subgoal_world[:, :2] - self._grid_orig_tensor) / self._grid_size).floor().to(torch.long)
+            subgoal_local = self.current_subgoal_world[:, :2] - self.tf_local_to_global_world_frame[:, :2]
+            subgoal_coords = ((subgoal_local - self._grid_orig_tensor) / self._grid_size).floor().to(torch.long)
             in_bounds_x = (subgoal_coords[:, 0] >= 0) & (subgoal_coords[:, 0] < self._grid_num[0])
             in_bounds_y = (subgoal_coords[:, 1] >= 0) & (subgoal_coords[:, 1] < self._grid_num[1])
             in_bounds = in_bounds_x & in_bounds_y
@@ -388,9 +407,12 @@ class BasicEnvironmentModel:
                 need_new = need_new | off_map
             if active_valid.any():
                 fm = frontier_mask_raw.squeeze(1)
-                still_frontier = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
                 still_frontier[active_valid] = fm[active_valid, subgoal_coords[active_valid, 0], subgoal_coords[active_valid, 1]]
-                need_new = need_new | (~still_frontier & self.subgoal_active)
+            need_new = need_new | (~still_frontier & self.subgoal_active)
+
+            reach_mask = within_tolerance & enough_steps & (~still_frontier)
+            need_new = need_new | reach_mask
+            self.prev_subgoal_distance[(~reach_mask) & self.subgoal_active] = current_dist[(~reach_mask) & self.subgoal_active]
 
         coverage_ratio = (self._environment_map != 0).float().mean(dim=(1, 2))
         if need_new.any():
@@ -406,7 +428,7 @@ class BasicEnvironmentModel:
                 self.subgoal_reward_accum[env_ids] = 0.0
                 self.subgoal_steps[env_ids] = 0.0
             self._select_frontier_targets(
-                drone_pos,
+                drone_pos_world,
                 need_new,
                 coverage_ratio,
                 candidate_mask=frontier_mask_raw,
@@ -438,10 +460,13 @@ class BasicEnvironmentModel:
         candidate_mask = candidate_mask.squeeze(1)
         if unknown_mask is not None:
             unknown_mask = unknown_mask.squeeze(1)
+        env_origins_xy = self.tf_local_to_global_world_frame[:, :2]
+        drone_pos_world = drone_pos
+        drone_pos_local = drone_pos_world[:, :2] - env_origins_xy
         centers_x = self._cell_centers_x.unsqueeze(0)
         centers_y = self._cell_centers_y.unsqueeze(0)
-        dx = centers_x - drone_pos[:, 0].unsqueeze(1).unsqueeze(2)
-        dy = centers_y - drone_pos[:, 1].unsqueeze(1).unsqueeze(2)
+        dx = centers_x - drone_pos_local[:, 0].unsqueeze(1).unsqueeze(2)
+        dy = centers_y - drone_pos_local[:, 1].unsqueeze(1).unsqueeze(2)
         distances = torch.sqrt(dx * dx + dy * dy + 1e-6)
         scores = gain - self.frontier_distance_weight * distances
         scores = scores.masked_fill(~candidate_mask, float("-inf"))
@@ -467,9 +492,9 @@ class BasicEnvironmentModel:
             coords = candidate_mask_env.nonzero(as_tuple=False)
             gains_env = gain[env_idx][candidate_mask_env]
             distances_env = distances[env_idx][candidate_mask_env]
-            world_x = self._cell_centers_x[coords[:, 0], coords[:, 1]]
-            world_y = self._cell_centers_y[coords[:, 0], coords[:, 1]]
-            headings = torch.atan2(world_y - drone_pos[env_idx, 1], world_x - drone_pos[env_idx, 0])
+            local_x = self._cell_centers_x[coords[:, 0], coords[:, 1]]
+            local_y = self._cell_centers_y[coords[:, 0], coords[:, 1]]
+            headings = torch.atan2(local_y - drone_pos_local[env_idx, 1], local_x - drone_pos_local[env_idx, 0])
 
             sorted_scores, order = scores_env.sort(descending=True)
             take = min(self.manager_max_candidates, sorted_scores.numel())
@@ -482,7 +507,7 @@ class BasicEnvironmentModel:
                 [gains_env[order], distances_env[order], sorted_scores[:take], headings[order]],
                 dim=1,
             )
-            cand_pos = torch.stack([world_x[order], world_y[order]], dim=1)
+            cand_pos = torch.stack([local_x[order], local_y[order]], dim=1)
             coords_ordered = coords[order]
 
             heuristic_choice = 0
@@ -499,11 +524,13 @@ class BasicEnvironmentModel:
                 if chosen_idx is not None:
                     choice = max(0, min(int(chosen_idx), take - 1))
 
-            self.current_subgoal_world[env_idx, 0] = cand_pos[choice, 0]
-            self.current_subgoal_world[env_idx, 1] = cand_pos[choice, 1]
+            origin_xy = env_origins_xy[env_idx]
+            selected_local = cand_pos[choice]
+            self.current_subgoal_world[env_idx, 0] = selected_local[0] + origin_xy[0]
+            self.current_subgoal_world[env_idx, 1] = selected_local[1] + origin_xy[1]
             self.current_subgoal_world[env_idx, 2] = self.subgoal_height
             self.subgoal_active[env_idx] = True
-            new_dist = torch.linalg.norm(self.current_subgoal_world[env_idx, :2] - drone_pos[env_idx, :2])
+            new_dist = torch.linalg.norm(self.current_subgoal_world[env_idx, :2] - drone_pos_world[env_idx, :2])
             self.prev_subgoal_distance[env_idx] = new_dist
             unknown_env = None
             if unknown_mask is not None:
@@ -526,8 +553,8 @@ class BasicEnvironmentModel:
         selected_cell: tuple[int, int] | None = None,
     ) -> None:
         mask_2d = candidate_mask_env.squeeze()
-        vis = torch.zeros_like(mask_2d, dtype=torch.uint8).cpu()
         mask_cpu = mask_2d.to(torch.bool).cpu()
+        vis = torch.zeros_like(mask_cpu, dtype=torch.uint8)
         vis[mask_cpu] = 1
         if unknown_mask_env is not None:
             unknown_cpu = unknown_mask_env.squeeze().to(torch.bool).cpu()
@@ -535,13 +562,36 @@ class BasicEnvironmentModel:
             replacement = torch.full_like(vis_unknown, 4)
             vis[unknown_cpu] = torch.where(vis_unknown > 0, vis_unknown, replacement)
         coords_cpu = coords_ordered.cpu() if coords_ordered is not None else None
+        selected_coords: tuple[int, int] | None = None
         if coords_cpu is not None and choice_idx is not None and coords_cpu.numel() > 0 and 0 <= choice_idx < coords_cpu.shape[0]:
-            cx, cy = coords_cpu[choice_idx].tolist()
-            vis[int(cx), int(cy)] = 2
+            sx, sy = coords_cpu[choice_idx].tolist()
+            selected_coords = (int(sx), int(sy))
         elif selected_cell is not None:
-            cx, cy = selected_cell
+            selected_coords = selected_cell
+        if selected_coords is not None:
+            cx, cy = selected_coords
             if 0 <= cx < vis.shape[0] and 0 <= cy < vis.shape[1]:
-                vis[cx, cy] = 2
+                if mask_cpu[cx, cy]:
+                    mask_np = mask_cpu.numpy()
+                    component = np.zeros_like(mask_np, dtype=bool)
+                    q: deque[tuple[int, int]] = deque()
+                    component[cx, cy] = True
+                    q.append((cx, cy))
+                    while q:
+                        x, y = q.popleft()
+                        for dx in (-1, 0, 1):
+                            for dy in (-1, 0, 1):
+                                if dx == 0 and dy == 0:
+                                    continue
+                                nx, ny = x + dx, y + dy
+                                if 0 <= nx < mask_np.shape[0] and 0 <= ny < mask_np.shape[1]:
+                                    if mask_np[nx, ny] and not component[nx, ny]:
+                                        component[nx, ny] = True
+                                        q.append((nx, ny))
+                    component_mask = torch.from_numpy(component)
+                    vis[component_mask] = 2
+                else:
+                    vis[cx, cy] = 2
         drone_cell = self.drone_grid_loc[env_idx]
         gx, gy = int(drone_cell[0].item()), int(drone_cell[1].item())
         if 0 <= gx < vis.shape[0] and 0 <= gy < vis.shape[1]:
@@ -889,17 +939,22 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         
     def update_environment_map(self, depth_images: torch.Tensor, drone_pose: torch.Tensor):
         self.compute_extrinsics(drone_pose)
-
         self.generate_PointCloud(depth_images)
 
+        first_step_mask = self._episode_steps == 0
         new_grid_area = self.update_gridmap_from_PointCloud(drone_pose)  # tensor of integers of size (num_envs)
 
         self.area_diff = new_grid_area - self._old_grid_area         # tensor of integers of size (num_envs)
-        self.area_diff[self._episode_steps == 0]= 0                  # Force the fist step to give area_diff =0. Otherwise the reward will be too big (everything is seen for the first time)
+        self.area_diff[first_step_mask] = 0                          # Avoid oversized first-step reward
+        self.area_diff = torch.clamp(self.area_diff, min=0)
+        diff_float = self.area_diff.to(torch.float32)
+        self.area_diff_reward = 1.0 - torch.exp(-diff_float / self.area_diff_reward_scale)
         assert torch.all(self.area_diff > -0.001), f"Unexpected area differences: {self.area_diff}. All values must be >= -0.001."
 
         self._old_grid_area = new_grid_area
         self._episode_steps += 1
+        self._update_subgoals(drone_pose)
+        self._update_curiosity(drone_pose[:, :3])
 
         for i in range(self.num_envs):
             self.drone_trajectory[i] = torch.cat((self.drone_trajectory[i], self.drone_grid_loc[i].unsqueeze(0)), dim=0)
@@ -932,6 +987,7 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         self.subgoal_active[idx_reset] = False
         self.prev_subgoal_distance[idx_reset] = 0.0
         self.current_subgoal_world[idx_reset] = 0.0
+        self.area_diff_reward[idx_reset] = 0.0
 
         return
 
@@ -951,7 +1007,9 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
             selected_cell = None
             if self.subgoal_active[env_idx]:
                 subgoal = self.current_subgoal_world[env_idx, :2]
-                grid_coords = ((subgoal - self._grid_orig_tensor) / self._grid_size).floor().to(torch.long)
+                origin_xy = self.tf_local_to_global_world_frame[env_idx, :2]
+                subgoal_local = subgoal - origin_xy
+                grid_coords = ((subgoal_local - self._grid_orig_tensor) / self._grid_size).floor().to(torch.long)
                 sx, sy = int(grid_coords[0].item()), int(grid_coords[1].item())
                 if 0 <= sx < self._grid_num[0] and 0 <= sy < self._grid_num[1]:
                     selected_cell = (sx, sy)

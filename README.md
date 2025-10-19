@@ -138,6 +138,70 @@ CUDA_VISIBLE_DEVICES=1 ./isaaclab.sh \
   --num_envs 1 \
   --headless \
   --task Drone_eval_envA \
+
+## Exploration Training Reference
+
+### Planner Hierarchy
+- **Frontier manager (global planner)** scores candidate frontier cells (`gain – distance_weight × distance`) and selects subgoals.  
+  - `planner_mode=assist`: heuristic flies while the manager learns from the demonstrations it observes.  
+  - `planner_mode=rl --manager_rl`: the trained manager actively chooses subgoals.
+- **SAC policy (local planner)** receives the active subgoal vector and learns low-level control to reach it. The `subgoal_progress_reward` term keeps it moving toward the selected frontier.
+
+Recommended workflow:
+1. **Assist phase (train manager while heuristic flies):**
+   ```sh
+   ./isaaclab.sh -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py \
+     --task Drone_SAC_convnextv2 \
+     --planner_mode assist \
+     --num_envs 4 \
+     --max_iterations 100000 \
+     --enable_cameras --headless
+   ```
+   This saves `manager_state.pt` in the run directory.
+2. **Full RL phase (manager + SAC both active):**
+   ```sh
+   ./isaaclab.sh -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py \
+     --task Drone_SAC_convnextv2 \
+     --planner_mode rl \
+     --manager_rl \
+     --manager_load_path <run_dir/manager_state.pt> \
+     --resume <run_dir/model_xxx_steps.zip> \
+     --num_envs 4 \
+     --enable_cameras --headless
+   ```
+
+### Reward Terms (default weights)
+| Term | Source | Weight | Purpose | Notes |
+| ---- | ------ | ------ | ------- | ----- |
+| `explore` | `mdp.rewards.area_coverage` (shaped as `1 - exp(-Δcells/5)`) | **0.5** | Reward new map cells; saturates smoothly. | Increase if exploration stalls; decrease if totals grow too fast. |
+| `subgoal_progress` | distance reduction + reach bonus | **0.2** | Encourage moving toward active frontier and reward completion. | Raising this makes long moves more attractive. |
+| `curiosity` | inverse visit-count bonus | **0.4** | Promote novel states after coverage saturates. | Decays automatically; no negative penalty. |
+| `idle_behavior` | `idle_penalty = -0.05` when motion below threshold | **1.0** | Discourage loitering/hovering without progress. | Adjust weight/penalty together to tune intensity. |
+| `collision_penalty` | contact sensor | **2.0** | Strongly punish impacts. | Keep high to maintain safety margin. |
+| `exploration_finished` | fixed bonus per scene | **150.0** | Terminate and reward full coverage. | Guarantees completing an office dominates returns. |
+
+All weights live in `isaac45/RL_drone/env_config_training.py` under `RewardsCfg`.
+
+### W&B Map Colors
+The exploration callback logs occupancy overlays with the following palette:
+- **Unknown**: dark gray (`[20, 20, 20]`)
+- **Free space**: light gray (`[200, 200, 200]`)
+- **Obstacle**: red (`[240, 80, 80]`)
+- **Trajectory**: blue (`[80, 160, 255]`)
+- **Frontier candidates**: gold (`[255, 215, 0]`)
+- **Selected frontier**: green (`[80, 200, 120]`, now covers the entire connected frontier component)
+- **Drone pose**: purple (`[170, 80, 255]`)
+
+### Metrics to Monitor
+The training callback streams useful scalars to W&B every `log_interval` steps:
+- **`reward/step_mean`**: mean reward of the latest batch of env steps. Quick sanity check for reward shaping.
+- **`rollout/ep_rew_mean` & `rollout/ep_len_mean`**: rolling episode return/length (the same stats SB3 prints). Main indicator of learning progress.
+- **Coverage** (`coverage/mean`, `coverage/new_cells_mean`): how much of the map has been explored and how many new cells were added recently.
+- **Subgoal diagnostics** (`subgoal/active_ratio`, `subgoal/distance_mean`, `subgoal/accum_reward_mean`): tells whether the manager keeps environments assigned and whether the local policy is closing distance.
+- **Manager state** (`manager/epsilon`, `manager/buffer_size`): epsilon-schedule and collected samples during assist/rl phases.
+- **Curiosity** (`curiosity/mean`): should decay as the agent revisits cells; spikes indicate entry into new rooms.
+
+Watch these curves together: rising coverage and episode reward, shrinking subgoal distances, and a healthy manager buffer signal that both planners are improving. If `reward/step_mean` or `rollout/ep_rew_mean` explode, revisit the reward weights table above.
   --checkpoint /workspace/isaaclab/DRL_UAV_Indoor_Exploration/trained_model_and_trajectories/RL_models/BC_SAC.zip
 ```
 

@@ -11,3 +11,19 @@ python -m pip install --upgrade --force-reinstall \
 
 ./isaaclab.sh -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py     --enable_cameras --num_envs 16 --headless --task Drone_SAC_no_IL_V1 
 
+
+
+./isaaclab.sh -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py   \
+--task Drone_SAC_convnextv2   --num_envs 4   --planner_mode assist   \
+--max_iterations 10000   --headless   --enable_cameras
+
+./isaaclab.sh \
+  -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py \
+  --task Drone_SAC_convnextv2 \
+  --num_envs 4 \
+  --planner_mode rl \
+  --manager_rl \
+  --enable_cameras \
+  --headless \
+  --manager_load_path <path_to_saved_manager_state.pt> \
+  --resume <if required to continue policy training>

@@ -21,6 +21,7 @@ run directory. Use --resume to continue SAC, and --manager_load_path to reload t
 
 import argparse
 import sys
+from collections import deque
 
 from isaaclab.app import AppLauncher
 
@@ -119,14 +120,37 @@ class WandbMetricsCallback(BaseCallback):
         self._env = env
         self._log_interval = max(1, log_interval)
         self._max_map_images = max(0, max_map_images)
+        self._ep_returns: deque[float] = deque(maxlen=100)
+        self._ep_lengths: deque[float] = deque(maxlen=100)
 
     def _on_step(self) -> bool:
+        infos = self.locals.get("infos")
+        if infos is not None:
+            for info in infos:
+                if not isinstance(info, dict):
+                    continue
+                ep_info = info.get("episode")
+                if ep_info is None:
+                    continue
+                if "r" in ep_info:
+                    self._ep_returns.append(float(ep_info["r"]))
+                if "l" in ep_info:
+                    self._ep_lengths.append(float(ep_info["l"]))
+
         if self.num_timesteps % self._log_interval != 0:
             return True
 
         env_base = getattr(self._env, "unwrapped", self._env)
         env_map = getattr(env_base, "env_map", None)
         log_payload: dict[str, object] = {}
+
+        rewards = self.locals.get("rewards")
+        if rewards is not None:
+            log_payload["reward/step_mean"] = float(np.asarray(rewards).mean())
+        if self._ep_returns:
+            log_payload["rollout/ep_rew_mean"] = float(np.mean(self._ep_returns))
+        if self._ep_lengths:
+            log_payload["rollout/ep_len_mean"] = float(np.mean(self._ep_lengths))
 
         if env_map is not None and hasattr(env_map, "environment_map"):
             try:
@@ -202,9 +226,6 @@ class WandbMetricsCallback(BaseCallback):
                             arr[vis_np == 1] = 4  # frontier candidates
                             arr[vis_np == 2] = 5  # selected frontier
                             arr[vis_np == 3] = 6  # drone marker
-                            arr[vis_np == 4] = 7  # unknown frontier cells
-                            if unknown_np is not None:
-                                arr[unknown_np == 1] = np.where(arr[unknown_np == 1] == 4, arr[unknown_np == 1], 7)
                             if frontier_vis is not None:
                                 env_map.frontier_snapshot[env_idx] = None
                                 if hasattr(env_map, "frontier_unknown_snapshot"):
@@ -216,8 +237,7 @@ class WandbMetricsCallback(BaseCallback):
                             [80, 160, 255],    # trajectory
                             [255, 215, 0],     # frontier candidate
                             [80, 200, 120],    # selected frontier
-                            [255, 80, 80],     # drone marker
-                            [255, 245, 150],   # unknown frontier cells
+                            [170, 80, 255],    # drone marker
                         ], dtype=np.uint8)
                         color_img = palette[arr]
                         map_logs[f"maps/env_{env_idx}"] = color_img
