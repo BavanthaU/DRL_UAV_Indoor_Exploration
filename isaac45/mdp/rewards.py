@@ -174,6 +174,9 @@ def subgoal_progress_reward(
     progress_weight: float = 0.5,
     reach_bonus: float = 5.0,
     tolerance: float = 1.5,
+    stagnation_penalty: float = 0.1,
+    stagnation_eps: float = 0.02,
+    stagnation_delay: int = 5,
 ) -> torch.Tensor:
     """Reward for moving toward and reaching the current frontier subgoal."""
     if not hasattr(env, "env_map") or env.env_map is None:
@@ -192,6 +195,25 @@ def subgoal_progress_reward(
     prev = env_map.prev_subgoal_distance
     progress = prev - dist
     reward = progress_weight * progress
+    negative_mask = progress < 0.0
+    if negative_mask.any():
+        reward[negative_mask] = progress_weight * 1.5 * progress[negative_mask]
+
+    if hasattr(env_map, "subgoal_steps"):
+        steps_active = env_map.subgoal_steps
+        if hasattr(env_map, "area_diff_reward"):
+            area_gain = env_map.area_diff_reward
+        else:
+            area_gain = torch.zeros_like(dist)
+        stagnant = (
+            active
+            & (steps_active >= stagnation_delay)
+            & (progress.abs() <= stagnation_eps)
+            & (area_gain <= stagnation_eps)
+        )
+        if stagnant.any():
+            reward[stagnant] -= stagnation_penalty
+
     reached = (dist <= tolerance) & active
     reward[reached] += reach_bonus
     reward[~active] = 0.0
