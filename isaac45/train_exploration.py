@@ -60,6 +60,7 @@ parser.add_argument("--manager_epsilon", type=float, default=0.1, help="Epsilon-
 parser.add_argument("--planner_mode", choices=["heuristic", "observe", "assist", "rl"], default="heuristic", help="Frontier planner mode: 'heuristic' for classical, 'observe' to log heuristics, 'assist' to imitate while heuristics run, 'rl' to learn subgoals.")
 parser.add_argument("--manager_load_path", type=str, default=None, help="Path to a saved frontier manager checkpoint.")
 parser.add_argument("--map_snapshot_interval", type=int, default=0, help="Log map and frontier overlays every N steps (0 disables periodic snapshots).")
+parser.add_argument("--obs_stack", type=int, default=4, help="Number of consecutive observations to stack per modality.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -188,6 +189,7 @@ class WandbMetricsCallback(BaseCallback):
                 try:
                     map_dict = env_map.wandb_environment_map_dict
                     traj_dict = getattr(env_map, "wandb_drone_traj_dict", {})
+                    status_dict = getattr(env_map, "episode_end_status", {})
                     frontier_cache = None
                     unknown_cache_np = None
                     logged = 0
@@ -230,6 +232,21 @@ class WandbMetricsCallback(BaseCallback):
                                 env_map.frontier_snapshot[env_idx] = None
                                 if hasattr(env_map, "frontier_unknown_snapshot"):
                                     env_map.frontier_unknown_snapshot[env_idx] = None
+                        status = None
+                        if isinstance(status_dict, dict):
+                            status = status_dict.get(env_idx)
+                        status_to_prefix = {
+                            "completed": "maps/completed",
+                            "crashed": "maps/crashed",
+                            "timeout": "maps/timeout",
+                            "snapshot": "maps/snapshot",
+                            "terminated": "maps/terminated",
+                        }
+                        prefix = status_to_prefix.get(status, "maps")
+                        key = f"{prefix}/env_{env_idx}" if prefix.startswith("maps/") else f"maps/env_{env_idx}"
+                        if prefix == "maps":
+                            key = f"{prefix}/env_{env_idx}"
+                        caption = f"env_{env_idx} ({status if status is not None else 'unspecified'})"
                         palette = np.array([
                             [20, 20, 20],      # unknown
                             [200, 200, 200],   # free space
@@ -240,7 +257,7 @@ class WandbMetricsCallback(BaseCallback):
                             [170, 80, 255],    # drone marker
                         ], dtype=np.uint8)
                         color_img = palette[arr]
-                        map_logs[f"maps/env_{env_idx}"] = color_img
+                        map_logs[key] = (color_img, caption)
                         logged += 1
                     if logged > 0:
                         env_map.reset_wandb_dicts_ended_episodes()
@@ -252,7 +269,11 @@ class WandbMetricsCallback(BaseCallback):
                     import wandb
 
                     for key, arr in map_logs.items():
-                        log_payload[key] = wandb.Image(arr, caption=key)
+                        if isinstance(arr, tuple):
+                            image_arr, caption = arr
+                        else:
+                            image_arr, caption = arr, key
+                        log_payload[key] = wandb.Image(image_arr, caption=caption)
                 except Exception:
                     pass
 
@@ -273,6 +294,46 @@ class WandbMetricsCallback(BaseCallback):
                 pass
         return True
 
+
+class ManagerCheckpointCallback(BaseCallback):
+    """Periodically save the frontier manager state during training."""
+
+    def __init__(
+        self,
+        manager,
+        save_freq: int,
+        save_dir: str,
+        name_prefix: str = "manager",
+        verbose: int = 0,
+    ):
+        super().__init__(verbose=verbose)
+        self._manager = manager
+        self._save_freq = max(1, int(save_freq))
+        self._save_dir = save_dir
+        self._name_prefix = name_prefix
+        self._last_saved_step = -1
+
+    def _init_callback(self) -> None:
+        os.makedirs(self._save_dir, exist_ok=True)
+
+    def _on_step(self) -> bool:
+        if self._manager is None:
+            return True
+        step = int(self.model.num_timesteps)
+        if step <= 0 or step == self._last_saved_step or (step % self._save_freq) != 0:
+            return True
+        filename = f"{self._name_prefix}_{step}_steps.pt"
+        path = os.path.join(self._save_dir, filename)
+        try:
+            torch.save(self._manager.state_dict(), path)
+            self._last_saved_step = step
+            if self.verbose > 0:
+                print(f"[INFO] Saved frontier manager checkpoint to {path}")
+        except Exception as err:
+            if self.verbose > 0:
+                print(f"[WARN] Failed to save frontier manager checkpoint ({err})")
+        return True
+
 # Import packages to use gymnasium environments
 import gymnasium as gym
 import random
@@ -286,6 +347,7 @@ from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
+from DRL_UAV_Indoor_Exploration.isaac45.utils.vec_dict_frame_stack import VecDictFrameStack
 from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
 
 # Stable-Baselines3 tools
@@ -406,6 +468,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
 
     # Wrapper around environment for SB3: actions are normalized forward/back velocity [-1,1] and yaw rate [-1,1]
     env = Sb3VecEnvWrapper(env, lower_bound=np.array([-1, -1]), upper_bound=np.array([1, 1]))
+    if args_cli.obs_stack > 1:
+        env = VecDictFrameStack(env, n_stack=args_cli.obs_stack)
     
     if "normalize_input" in agent_cfg:
         env = VecNormalize(
@@ -527,6 +591,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     checkpoint_callback = CheckpointCallback(save_freq=10000, save_path=log_dir, name_prefix="model", verbose=2)
     tqdm_cb = TqdmCallback(total_target=n_timesteps, start=start_timesteps, update_interval=1000)
     callback_list = [checkpoint_callback, tqdm_cb]
+    if frontier_manager is not None:
+        manager_ckpt_dir = os.path.join(log_dir, "manager_checkpoints")
+        manager_checkpoint = ManagerCheckpointCallback(
+            manager=frontier_manager,
+            save_freq=checkpoint_callback.save_freq,
+            save_dir=manager_ckpt_dir,
+            name_prefix="manager",
+            verbose=1,
+        )
+        callback_list.append(manager_checkpoint)
     if _wandb:
         callback_list.append(WandbMetricsCallback(env, log_interval=200))
     callbacks = CallbackList(callback_list)

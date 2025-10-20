@@ -169,6 +169,65 @@ def raycast_proximity_penalty(
     return rewards
 
 
+SUCCESS_TERM_NAMES = {
+    "area_is_covered",
+    "exploration_finished",
+    "goal_reached",
+    "task_success",
+    "coverage_complete",
+    "exploration_completed",
+}
+CRASH_TERM_NAMES = {
+    "drone_crashes",
+    "drone_crashes_raycast",
+    "drone_crashes_single_contact_sensor",
+    "drone_flips",
+    "collision",
+    "crash",
+    "failure",
+}
+
+
+def _classify_episode_end(env: ManagerBasedRLEnv, done_mask: torch.Tensor) -> dict[int, str]:
+    """Return a mapping of env index to termination status string."""
+    term_mgr = getattr(env, "termination_manager", None)
+    if term_mgr is None or done_mask is None or done_mask.numel() == 0:
+        return {}
+    indices = torch.nonzero(done_mask, as_tuple=False).squeeze(-1)
+    if indices.ndim == 0 and indices.numel() > 0:
+        indices = indices.unsqueeze(0)
+    if indices.numel() == 0:
+        return {}
+
+    active_terms = set(getattr(term_mgr, "active_terms", []))
+    term_values: dict[str, torch.Tensor] = {}
+    for name in active_terms:
+        try:
+            term_values[name] = term_mgr.get_term(name)
+        except Exception:
+            continue
+    timeouts = getattr(term_mgr, "time_outs", None)
+
+    results: dict[int, str] = {}
+    for idx_tensor in indices:
+        idx = int(idx_tensor.item())
+        status = "terminated"
+        if timeouts is not None and bool(timeouts[idx].item()):
+            status = "timeout"
+        elif any(
+            name in term_values and bool(term_values[name][idx].item())
+            for name in SUCCESS_TERM_NAMES
+        ):
+            status = "completed"
+        elif any(
+            name in term_values and bool(term_values[name][idx].item())
+            for name in CRASH_TERM_NAMES
+        ):
+            status = "crashed"
+        results[idx] = status
+    return results
+
+
 def subgoal_progress_reward(
     env: ManagerBasedRLEnv,
     progress_weight: float = 0.5,
@@ -177,8 +236,17 @@ def subgoal_progress_reward(
     stagnation_penalty: float = 0.1,
     stagnation_eps: float = 0.02,
     stagnation_delay: int = 5,
+    linger_distance_scale: float = 1.2,
+    linger_penalty_power: float = 1.5,
+    max_penalty: float | None = 5.0,
+    max_positive: float | None = 10.0,
 ) -> torch.Tensor:
-    """Reward for moving toward and reaching the current frontier subgoal."""
+    """Reward for moving toward and reaching the current frontier subgoal.
+
+    The reward tracks progress toward active frontiers and gives a one-off reach bonus.
+    Lingering near a frontier without making progress or discovering new area triggers
+    a growing penalty that prevents the agent from farming reward by hovering.
+    """
     if not hasattr(env, "env_map") or env.env_map is None:
         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
     env_map = env.env_map
@@ -199,23 +267,40 @@ def subgoal_progress_reward(
     if negative_mask.any():
         reward[negative_mask] = progress_weight * 1.5 * progress[negative_mask]
 
-    if hasattr(env_map, "subgoal_steps"):
-        steps_active = env_map.subgoal_steps
-        if hasattr(env_map, "area_diff_reward"):
-            area_gain = env_map.area_diff_reward
-        else:
-            area_gain = torch.zeros_like(dist)
-        stagnant = (
-            active
-            & (steps_active >= stagnation_delay)
-            & (progress.abs() <= stagnation_eps)
-            & (area_gain <= stagnation_eps)
-        )
-        if stagnant.any():
-            reward[stagnant] -= stagnation_penalty
+    steps_active = getattr(env_map, "subgoal_steps", torch.zeros_like(dist))
+    if hasattr(env_map, "area_diff_reward"):
+        area_gain = env_map.area_diff_reward
+    else:
+        area_gain = torch.zeros_like(dist)
 
-    reached = (dist <= tolerance) & active
-    reward[reached] += reach_bonus
+    stagnant = (
+        active
+        & (steps_active >= stagnation_delay)
+        & (progress.abs() <= stagnation_eps)
+        & (area_gain <= stagnation_eps)
+    )
+
+    if linger_distance_scale is not None and linger_distance_scale > 0.0:
+        stagnant = stagnant & (dist <= tolerance * linger_distance_scale)
+
+    if stagnation_penalty > 0.0 and stagnant.any():
+        extra_steps = torch.clamp(steps_active[stagnant] - float(stagnation_delay) + 1.0, min=1.0)
+        if linger_penalty_power != 1.0:
+            penalty_scale = extra_steps.pow(linger_penalty_power)
+        else:
+            penalty_scale = extra_steps
+        reward[stagnant] -= stagnation_penalty * penalty_scale
+
+    reached_now = active & (dist <= tolerance) & (prev > tolerance)
+    if reach_bonus != 0.0 and reached_now.any():
+        reward[reached_now] += reach_bonus
+
+    if max_positive is not None:
+        reward = torch.clamp(reward, max=float(max_positive))
+    if max_penalty is not None:
+        max_penalty_abs = float(abs(max_penalty))
+        reward = torch.clamp(reward, min=-max_penalty_abs)
+
     reward[~active] = 0.0
     env_map.prev_subgoal_distance = dist
     return reward
@@ -248,7 +333,8 @@ def area_coverage (env: ManagerBasedRLEnv) -> torch.Tensor:
 
     # Reset map and for environments that have terminated
     ended_envs = env.termination_manager.dones
-    env_map.reset_environment_map(ended_envs)
+    statuses = _classify_episode_end(env, ended_envs)
+    env_map.reset_environment_map(ended_envs, statuses if statuses else None)
 
     return rewards
 
@@ -290,7 +376,8 @@ def area_coverage_and_loop_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
 
     # Reset map and looping counter and for environments that have terminated
     ended_envs = env.termination_manager.dones
-    env_map.reset_environment_map(ended_envs)
+    statuses = _classify_episode_end(env, ended_envs)
+    env_map.reset_environment_map(ended_envs, statuses if statuses else None)
     env.no_new_cells_counter[ended_envs] = 0
 
     return rewards

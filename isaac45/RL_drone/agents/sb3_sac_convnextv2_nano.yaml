@@ -4,7 +4,7 @@ n_timesteps: !!float 2.048e7
 
 policy: 'MultiInputPolicy'
 learning_rate: !!float 3.0e-4
-batch_size: 32
+batch_size: 512
 gamma: 0.99
 tau: 0.005
 
@@ -26,5 +26,5 @@ policy_kwargs: "dict(
   ),
   share_features_extractor=True)"
 
-buffer_size: 100
-learning_starts: 100
+buffer_size: 100000
+learning_starts: 10000

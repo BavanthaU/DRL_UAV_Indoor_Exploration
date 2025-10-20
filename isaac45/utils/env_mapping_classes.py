@@ -273,16 +273,17 @@ class BasicEnvironmentModel:
         self._grid_orig = (self._grid_orig[0] - shift_x * self._grid_size, self._grid_orig[1] - shift_y * self._grid_size)
         self._grid_orig_tensor = torch.tensor(self._grid_orig, device=self.device)
 
+        old_h, old_w = self._grid_num
         # Create a new expanded grid
         new_grid = torch.zeros((self.num_envs, new_grid_size_x, new_grid_size_y), device = self.device, dtype=torch.uint8)
 
         # Copy old grid values into the new grid, shifted if necessary
-        new_grid[:, shift_x:shift_x + self._grid_num[0], shift_y:shift_y + self._grid_num[1]] = self._environment_map
+        new_grid[:, shift_x:shift_x + old_h, shift_y:shift_y + old_w] = self._environment_map
 
         new_visitation = torch.zeros((self.num_envs, new_grid_size_x, new_grid_size_y),
                                      device=self.device,
                                      dtype=self.visitation_counts.dtype)
-        new_visitation[:, shift_x:shift_x + self._grid_num[0], shift_y:shift_y + self._grid_num[1]] = self.visitation_counts
+        new_visitation[:, shift_x:shift_x + old_h, shift_y:shift_y + old_w] = self.visitation_counts
 
         # Update the grid size and environment map
         self._grid_num = (new_grid_size_x, new_grid_size_y)
@@ -350,7 +351,12 @@ class BasicEnvironmentModel:
         self._maybe_log_map_snapshots()
 
 
-    def reset_environment_map(self, idx_reset):
+    def reset_environment_map(self, idx_reset, end_status=None):
+        env_ids = torch.nonzero(idx_reset, as_tuple=False).squeeze(-1)
+        if env_ids.ndim == 0 and env_ids.numel() > 0:
+            env_ids = env_ids.unsqueeze(0)
+        if env_ids.ndim == 0:
+            env_ids = torch.empty(0, dtype=torch.long, device=idx_reset.device)
         self._environment_map[idx_reset] = torch.zeros((self._grid_num[0], self._grid_num[1]), device = self.device, dtype=torch.uint8)
         self._old_grid_area [idx_reset] = 0
         self._episode_steps [idx_reset] = 0
@@ -361,9 +367,6 @@ class BasicEnvironmentModel:
         self.prev_subgoal_distance[idx_reset] = 0.0
         self.area_diff_reward[idx_reset] = 0.0
         if self.manager is not None:
-            env_ids = torch.nonzero(idx_reset, as_tuple=False).squeeze(-1)
-            if env_ids.ndim == 0 and env_ids.numel() > 0:
-                env_ids = env_ids.unsqueeze(0)
             if env_ids.numel() > 0:
                 rewards = self.subgoal_reward_accum[env_ids].clone()
                 steps = self.subgoal_steps[env_ids].clone()
@@ -375,7 +378,15 @@ class BasicEnvironmentModel:
         self.subgoal_steps[idx_reset] = 0.0
         self.visitation_counts[idx_reset] = 0.0
         self.curiosity_reward[idx_reset] = 0.0
-
+        if env_ids.numel() > 0 and hasattr(self, "episode_end_status"):
+            for env_idx in env_ids.tolist():
+                status_value = None
+                if end_status is not None:
+                    if isinstance(end_status, dict):
+                        status_value = end_status.get(int(env_idx))
+                    elif torch.is_tensor(end_status) and end_status.numel() > env_idx:
+                        status_value = end_status[int(env_idx)]
+                self.episode_end_status[int(env_idx)] = status_value
         return
 
     def _update_subgoals(self, drone_pose: torch.Tensor):
@@ -701,6 +712,7 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         self.environment_map_ended_episodes = {i: None for i in range(self.num_envs)}
         self.drone_trajectory_ended_episodes = {i: None for i in range(self.num_envs)}
         self.frontier_snapshot = {i: None for i in range(self.num_envs)}
+        self.episode_end_status = {i: None for i in range(self.num_envs)}
 
     
     @property
@@ -722,6 +734,7 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
     def reset_wandb_dicts_ended_episodes(self):
         self.environment_map_ended_episodes = {i: None for i in range(self.num_envs)}
         self.drone_trajectory_ended_episodes = {i: None for i in range(self.num_envs)}
+        self.episode_end_status = {i: None for i in range(self.num_envs)}
 
     def update_gridmap_from_PointCloud (self, drone_pose: torch.Tensor)-> torch.Tensor:
         
@@ -961,7 +974,7 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
 
         self._maybe_log_map_snapshots()
 
-    def reset_environment_map(self, idx_reset):     # idx_reset: tensor of shape (num_envs) with 0/1 for the environments that don't/ do need to be reset.
+    def reset_environment_map(self, idx_reset, end_status=None):     # idx_reset: tensor of shape (num_envs) with 0/1 for the environments that don't/ do need to be reset.
         
         true_indices = torch.nonzero(idx_reset, as_tuple=False).squeeze()       # tensor of shape (num_envs to be reset)
         if true_indices.ndim == 0:                                              # If there is only 1 indx to reset, true_indices is a scalar. Convert it to a 1D tensor.
@@ -977,6 +990,14 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
             self.drone_trajectory_ended_episodes[idx.item()] = self.drone_trajectory[idx]
             self.frontier_snapshot[idx.item()] = None
             self.frontier_unknown_snapshot[idx.item()] = None
+            if hasattr(self, "episode_end_status"):
+                status_value = None
+                if end_status is not None:
+                    if isinstance(end_status, dict):
+                        status_value = end_status.get(int(idx.item()))
+                    elif torch.is_tensor(end_status) and end_status.numel() > int(idx.item()):
+                        status_value = end_status[int(idx.item())]
+                self.episode_end_status[int(idx.item())] = status_value
 
         self._environment_map[idx_reset] = torch.zeros((self._grid_num[0], self._grid_num[1]), device = self.device, dtype=torch.uint8)
         self._old_grid_area [idx_reset] = 0
@@ -988,7 +1009,6 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         self.prev_subgoal_distance[idx_reset] = 0.0
         self.current_subgoal_world[idx_reset] = 0.0
         self.area_diff_reward[idx_reset] = 0.0
-
         return
 
     def _maybe_log_map_snapshots(self) -> None:
@@ -1004,6 +1024,10 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
             self.environment_map_ended_episodes[env_idx] = self._environment_map[env_idx].detach().to("cpu").clone()
             if hasattr(self, "drone_trajectory"):
                 self.drone_trajectory_ended_episodes[env_idx] = self.drone_trajectory[env_idx].clone()
+            if hasattr(self, "episode_end_status"):
+                current_status = self.episode_end_status.get(env_idx) if isinstance(self.episode_end_status, dict) else None
+                if current_status is None:
+                    self.episode_end_status[env_idx] = "snapshot"
             selected_cell = None
             if self.subgoal_active[env_idx]:
                 subgoal = self.current_subgoal_world[env_idx, :2]

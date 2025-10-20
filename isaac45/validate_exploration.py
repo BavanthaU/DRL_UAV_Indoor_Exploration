@@ -22,6 +22,7 @@ parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maxim
 parser.add_argument("--planner_mode", choices=["heuristic", "observe", "assist", "rl"], default="heuristic", help="Frontier planner mode during evaluation.")
 parser.add_argument("--manager_load_path", type=str, default=None, help="Optional path to a frontier manager checkpoint for evaluation.")
 parser.add_argument("--map_snapshot_interval", type=int, default=0, help="Log map/frontier overlays every N steps (0 disables periodic snapshots).")
+parser.add_argument("--obs_stack", type=int, default=4, help="Number of consecutive observations to stack per modality.")
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 sys.argv = [sys.argv[0]] + hydra_args
@@ -44,6 +45,7 @@ from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml, dump_pickle
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
+from DRL_UAV_Indoor_Exploration.isaac45.utils.vec_dict_frame_stack import VecDictFrameStack
 from DRL_UAV_Indoor_Exploration.isaac45.planner import FrontierRLManager
 
 # Stable-Baselines3 tools
@@ -131,7 +133,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
             training=False,
             mode=planner_mode,
         )
-        env_model.register_manager(frontier_manager, mode=planner_mode)
         if args_cli.manager_load_path is not None:
             try:
                 state = torch.load(args_cli.manager_load_path, map_location=device)
@@ -139,9 +140,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
                 print(f"[INFO] Loaded frontier manager from {args_cli.manager_load_path}")
             except Exception as err:
                 print(f"[WARN] Failed to load frontier manager checkpoint ({err})")
+        env_model.register_manager(frontier_manager, mode=planner_mode)
     
     # Wrapper around environment for SB3: actions are normalized forward/back velocity [-1,1] and yaw rate [-1,1]
     env = Sb3VecEnvWrapper(env, lower_bound=np.array([-1, -1]), upper_bound=np.array([1, 1]))
+    if args_cli.obs_stack > 1:
+        env = VecDictFrameStack(env, n_stack=args_cli.obs_stack)
 
     # Normalize env
     env = VecNormalize(

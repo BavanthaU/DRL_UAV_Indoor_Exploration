@@ -171,7 +171,17 @@ class RewardsCfg:
     subgoal_progress = RewTerm(
         func=mdp.rewards.subgoal_progress_reward,
         weight=0.2,
-        params={"progress_weight": 0.5, "reach_bonus": 5.0, "tolerance": 1.5},
+        params={
+            "progress_weight": 0.5,
+            "reach_bonus": 5.0,
+            "tolerance": 1.5,
+            "stagnation_penalty": 0.3,
+            "stagnation_delay": 5,
+            "linger_distance_scale": 1.2,
+            "linger_penalty_power": 1.5,
+            "max_penalty": 5.0,
+            "max_positive": 10.0,
+        },
     )
     curiosity = RewTerm(
         func=mdp.rewards.curiosity_intrinsic_reward,
