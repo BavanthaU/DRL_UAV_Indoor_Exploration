@@ -58,7 +58,31 @@ class VecDictFrameStack(VecEnvWrapper):
 
     def step_wait(self):
         obs, rewards, dones, infos = self.venv.step_wait()
+
+        terminal_stacks: dict[int, dict[str, np.ndarray]] = {}
+        if isinstance(obs, dict) and dones is not None and np.any(dones):
+            done_indices = np.where(dones)[0]
+            for env_idx in done_indices:
+                info = infos[env_idx]
+                term_obs = info.get("terminal_observation")
+                if term_obs is None or not isinstance(term_obs, dict):
+                    continue
+                stacked_term: dict[str, np.ndarray] = {}
+                for key, value in term_obs.items():
+                    if key not in self.buffers:
+                        stacked_term[key] = value
+                        continue
+                    history = self.buffers[key][env_idx].copy()
+                    stacked_history = np.concatenate((history[1:], value[None, ...]), axis=0)
+                    stacked_term[key] = self._reshape_single(stacked_history, key)
+                terminal_stacks[env_idx] = stacked_term
+
         stacked_obs = self._stack_observations(obs, reset=False, dones=dones)
+
+        if terminal_stacks:
+            for env_idx, stacked_term in terminal_stacks.items():
+                infos[env_idx]["terminal_observation"] = stacked_term
+
         return stacked_obs, rewards, dones, infos
 
     def _stack_observations(
@@ -92,3 +116,10 @@ class VecDictFrameStack(VecEnvWrapper):
             return buffer.reshape(self.num_envs, self.n_stack * orig_shape[0])
         new_shape = (self.num_envs, self.n_stack * orig_shape[0]) + orig_shape[1:]
         return buffer.reshape(new_shape)
+
+    def _reshape_single(self, stack: np.ndarray, key: str) -> np.ndarray:
+        orig_shape = self.key_shapes[key]
+        if len(orig_shape) == 1:
+            return stack.reshape(self.n_stack * orig_shape[0])
+        new_shape = (self.n_stack * orig_shape[0],) + orig_shape[1:]
+        return stack.reshape(new_shape)

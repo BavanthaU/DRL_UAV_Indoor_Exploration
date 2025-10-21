@@ -50,8 +50,6 @@ parser.add_argument("--resume", type=str, default=None, help="Path to SB3 .zip c
 parser.add_argument("--wandb_project", type=str, default="isaac-drone-hierarchical", help="W&B project name")
 parser.add_argument("--wandb_name", type=str, default=None, help="W&B run name (optional)")
 parser.add_argument("--wandb_mode", type=str, default="online", help="'online'|'offline'|'disabled'")
-parser.add_argument("--ray_debug", action="store_true", help="Print ray-caster min distances each step.")
-parser.add_argument("--ray_debug_hits", action="store_true", help="Additionally print raw ray hit points (env 0).")
 parser.add_argument("--manager_rl", action="store_true", help="Enable RL-based frontier manager.")
 parser.add_argument("--manager_max_candidates", type=int, default=8, help="Maximum frontier candidates considered by the manager.")
 parser.add_argument("--manager_lr", type=float, default=1e-3, help="Learning rate for the frontier manager policy.")
