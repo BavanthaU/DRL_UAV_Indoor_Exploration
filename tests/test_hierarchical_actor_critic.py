@@ -53,6 +53,37 @@ class HierarchicalActorCriticTest(unittest.TestCase):
         self.assertEqual(tuple(evaluated.log_prob.shape), (2,))
         self.assertTrue(torch.isfinite(evaluated.log_prob).all())
 
+    def test_forward_sanitizes_nonfinite_observations(self):
+        from exploration_stack.hierarchy import HierarchicalActorCritic, HierarchicalActorCriticConfig
+        from exploration_stack.vlm_frontend import VLMPolicyEncoderConfig
+
+        obs = _obs()
+        obs["camera_rgb"][0, :, 0, 0] = float("nan")
+        obs["depth_line"][0, 0] = float("inf")
+        obs["frontier_mask"][:] = 0.0
+        model = HierarchicalActorCritic(
+            HierarchicalActorCriticConfig(
+                encoder=VLMPolicyEncoderConfig(
+                    vlm_backend="mock",
+                    image_mode="camera_plus_map",
+                    image_size=32,
+                    latent_dim=64,
+                    depth_line_dim=64,
+                    semantic_line_dim=64,
+                    subgoal_feature_dim=5,
+                ),
+                max_candidates=8,
+                candidate_hidden_dim=64,
+                option_hidden_dim=128,
+                frontier_candidate_dropout_prob=1.0,
+            )
+        )
+        out = model(obs, training=True)
+        self.assertTrue(torch.isfinite(out.option_logits).all())
+        self.assertTrue(torch.isfinite(out.candidate_logits).all())
+        self.assertTrue(torch.isfinite(out.action).all())
+        self.assertTrue(out.candidate_mask.any(dim=1).all())
+
 
 if __name__ == "__main__":
     unittest.main()

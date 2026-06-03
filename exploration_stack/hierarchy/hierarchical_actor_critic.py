@@ -145,7 +145,9 @@ class HierarchicalActorCritic(nn.Module if nn is not None else object):
             candidate_mask,
         )
         option_mask = build_option_mask(candidate_features, candidate_mask)
+        option_logits = torch.nan_to_num(option_logits, nan=0.0, posinf=0.0, neginf=0.0)
         option_logits = option_logits.masked_fill(~option_mask, -1.0e9)
+        candidate_logits = torch.nan_to_num(candidate_logits, nan=-1.0e9, posinf=0.0, neginf=-1.0e9)
         option_dist = Categorical(logits=option_logits)
         candidate_dist = Categorical(logits=candidate_logits)
         if options is None:
@@ -159,7 +161,8 @@ class HierarchicalActorCritic(nn.Module if nn is not None else object):
         selected_candidate = self._gather_candidate(candidate_tokens, candidate)
         option_embed = self.option_embedding(option)
         local_context = torch.cat([enc.z_actor, selected_candidate, option_embed], dim=-1)
-        mean = torch.tanh(self.local_actor(local_context))
+        local_context = torch.nan_to_num(local_context, nan=0.0, posinf=0.0, neginf=0.0)
+        mean = torch.nan_to_num(torch.tanh(self.local_actor(local_context)), nan=0.0, posinf=1.0, neginf=-1.0)
         log_std = self.actor_log_std.clamp(-5.0, 2.0)
         std = log_std.exp().expand_as(mean)
         local_dist = Normal(mean, std)

@@ -204,6 +204,7 @@ class HierarchicalPPOTrainerAdapter(TrainerAdapter):
             "entropy/local": 0.0,
             "entropy/option": 0.0,
             "entropy/candidate": 0.0,
+            "skipped_minibatches": 0.0,
         }
         updates = 0
         for _ in range(self.cfg.learning_epochs):
@@ -226,9 +227,17 @@ class HierarchicalPPOTrainerAdapter(TrainerAdapter):
                 value_loss = value_mse_loss(out.value, flat["returns"][mb])
                 entropy = out.entropy.mean()
                 loss = policy_loss + self.cfg.value_loss_coef * value_loss - self.cfg.entropy_coef * entropy
+                if not torch.isfinite(loss):
+                    self.optimizer.zero_grad(set_to_none=True)
+                    metrics["skipped_minibatches"] += 1.0
+                    continue
                 self.optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.max_grad_norm)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.max_grad_norm)
+                if not torch.isfinite(grad_norm):
+                    self.optimizer.zero_grad(set_to_none=True)
+                    metrics["skipped_minibatches"] += 1.0
+                    continue
                 self.optimizer.step()
                 metrics["policy_loss"] += float(policy_loss.detach().cpu())
                 metrics["value_loss"] += float(value_loss.detach().cpu())
@@ -238,7 +247,9 @@ class HierarchicalPPOTrainerAdapter(TrainerAdapter):
                 metrics["entropy/candidate"] += float(out.candidate_entropy.mean().detach().cpu())
                 updates += 1
         denom = max(1, updates)
-        return {key: value / denom for key, value in metrics.items()}
+        averaged = {key: value / denom for key, value in metrics.items() if key != "skipped_minibatches"}
+        averaged["skipped_minibatches"] = metrics["skipped_minibatches"]
+        return averaged
 
     def _rollout_metrics(self, rollout):
         metrics: dict[str, float] = {

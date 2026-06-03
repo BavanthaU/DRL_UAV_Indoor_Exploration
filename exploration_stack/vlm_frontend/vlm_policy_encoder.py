@@ -85,7 +85,7 @@ class VLMPolicyEncoder(nn.Module if nn is not None else object):
         camera_embedding = None
         map_embedding = None
         if self.cfg.image_mode in ("camera_only", "camera_plus_map"):
-            camera = self._require(obs, "camera_rgb")
+            camera = self._sanitize_float(self._require(obs, "camera_rgb"))
             text_embeddings = self.vlm.encode_text(self.prompt_bank.prompts).to(camera.device)
             camera_embedding = self.vlm.encode_image(camera)
             embeddings.append(camera_embedding)
@@ -97,6 +97,7 @@ class VLMPolicyEncoder(nn.Module if nn is not None else object):
                 frontier_mask=obs.get("frontier_mask"),
                 trajectory_mask=obs.get("trajectory_mask"),
             )
+            rendered_map = self._sanitize_float(rendered_map)
             if text_embeddings is None:
                 text_embeddings = self.vlm.encode_text(self.prompt_bank.prompts).to(rendered_map.device)
             map_embedding = self.vlm.encode_image(rendered_map)
@@ -109,7 +110,7 @@ class VLMPolicyEncoder(nn.Module if nn is not None else object):
         if self.cfg.use_semantic_line:
             fused_parts.append(self._pad_or_trim(obs.get("semantic_line"), self.cfg.semantic_line_dim, batch, fused_parts[0].device))
         fused_parts.append(self._pad_or_trim(obs.get("subgoal_features"), self.cfg.subgoal_feature_dim, batch, fused_parts[0].device))
-        fused = torch.cat(fused_parts, dim=-1)
+        fused = torch.nan_to_num(torch.cat(fused_parts, dim=-1), nan=0.0, posinf=0.0, neginf=0.0)
         latent = self.input_proj(fused)
         if self.memory is not None:
             latent_seq = latent.unsqueeze(1)
@@ -152,7 +153,7 @@ class VLMPolicyEncoder(nn.Module if nn is not None else object):
     def _pad_or_trim(value, target_dim: int, batch: int, device):
         if value is None:
             return torch.zeros(batch, target_dim, device=device)
-        value = value.float()
+        value = torch.nan_to_num(value.float(), nan=0.0, posinf=0.0, neginf=0.0)
         if value.ndim > 2:
             value = value.flatten(start_dim=1)
         if value.shape[-1] == target_dim:
@@ -161,3 +162,7 @@ class VLMPolicyEncoder(nn.Module if nn is not None else object):
             return value[:, :target_dim]
         pad = torch.zeros(value.shape[0], target_dim - value.shape[-1], device=value.device, dtype=value.dtype)
         return torch.cat([value, pad], dim=-1)
+
+    @staticmethod
+    def _sanitize_float(value):
+        return torch.nan_to_num(value.float(), nan=0.0, posinf=1.0, neginf=0.0)

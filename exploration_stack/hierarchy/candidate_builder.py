@@ -47,7 +47,7 @@ class CandidateBuilder:
         frontier_mask = obs.get("frontier_mask")
         if frontier_mask is None:
             return self._fallback_candidates(obs)
-        frontier_mask = frontier_mask.float()
+        frontier_mask = torch.nan_to_num(frontier_mask.float(), nan=0.0, posinf=0.0, neginf=0.0)
         batch, height, width = frontier_mask.shape
         features = torch.zeros(batch, self.cfg.max_candidates, self.cfg.feature_dim, device=frontier_mask.device)
         mask = torch.zeros(batch, self.cfg.max_candidates, dtype=torch.bool, device=frontier_mask.device)

@@ -51,12 +51,14 @@ class MobileCLIPEncoder(VLMEncoder):
         return int(getattr(self.model, "embed_dim", 512))
 
     def encode_image(self, images):
+        images = torch.nan_to_num(images.float(), nan=0.0, posinf=1.0, neginf=0.0).clamp(0.0, 1.0)
         with torch.set_grad_enabled(not self.freeze):
             if hasattr(self.model, "encode_image"):
-                embedding = self.model.encode_image(images.float())
+                embedding = self.model.encode_image(images)
             else:
                 raise RuntimeError("Installed MobileCLIP model does not expose encode_image().")
-        return F.normalize(embedding.float(), dim=-1)
+        embedding = torch.nan_to_num(embedding.float(), nan=0.0, posinf=0.0, neginf=0.0)
+        return F.normalize(embedding, dim=-1)
 
     def encode_text(self, prompts: list[str]):
         if not hasattr(self, "_tokenizer"):
@@ -68,7 +70,8 @@ class MobileCLIPEncoder(VLMEncoder):
         tokens = self._tokenizer(prompts).to(next(self.model.parameters()).device)
         with torch.set_grad_enabled(not self.freeze):
             embedding = self.model.encode_text(tokens)
-        return F.normalize(embedding.float(), dim=-1)
+        embedding = torch.nan_to_num(embedding.float(), nan=0.0, posinf=0.0, neginf=0.0)
+        return F.normalize(embedding, dim=-1)
 
     @staticmethod
     def _normalize_model_name(model_name: str) -> str:

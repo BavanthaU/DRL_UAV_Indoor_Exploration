@@ -40,9 +40,16 @@ class CandidateSetEncoder(nn.Module if nn is not None else object):
         self.encoder = nn.TransformerEncoder(layer, num_layers=self.cfg.layers)
 
     def forward(self, candidate_features, candidate_mask):
-        encoded = self.input_proj(candidate_features.float())
-        key_padding_mask = ~candidate_mask.bool()
+        candidate_features = torch.nan_to_num(candidate_features.float(), nan=0.0, posinf=0.0, neginf=0.0)
+        candidate_mask = candidate_mask.bool().clone()
+        empty = ~candidate_mask.any(dim=1)
+        if empty.any():
+            candidate_mask[empty, 0] = True
+        encoded = self.input_proj(candidate_features)
+        encoded = torch.nan_to_num(encoded, nan=0.0, posinf=0.0, neginf=0.0)
+        key_padding_mask = ~candidate_mask
         encoded = self.encoder(encoded, src_key_padding_mask=key_padding_mask)
+        encoded = torch.nan_to_num(encoded, nan=0.0, posinf=0.0, neginf=0.0)
         masked = encoded.masked_fill(~candidate_mask.unsqueeze(-1), 0.0)
         denom = candidate_mask.sum(dim=1, keepdim=True).clamp_min(1).float()
         pooled = masked.sum(dim=1) / denom

@@ -93,12 +93,15 @@ def build_vlm_encoder(
 
 
 def prompt_similarity(image_embedding, text_embeddings):
+    image_embedding = torch.nan_to_num(image_embedding, nan=0.0, posinf=0.0, neginf=0.0)
+    text_embeddings = torch.nan_to_num(text_embeddings, nan=0.0, posinf=0.0, neginf=0.0)
     image_embedding = F.normalize(image_embedding, dim=-1)
     text_embeddings = F.normalize(text_embeddings, dim=-1)
-    return image_embedding @ text_embeddings.T
+    return torch.nan_to_num(image_embedding @ text_embeddings.T, nan=0.0, posinf=0.0, neginf=0.0)
 
 
 def prompt_uncertainty(similarities):
+    similarities = torch.nan_to_num(similarities, nan=0.0, posinf=0.0, neginf=0.0)
     probs = torch.softmax(similarities, dim=-1)
     entropy = -(probs * torch.log(probs.clamp_min(1e-8))).sum(dim=-1)
     entropy = entropy / max(1, similarities.shape[-1])

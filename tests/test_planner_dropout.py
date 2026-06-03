@@ -37,6 +37,24 @@ class PlannerDropoutTest(unittest.TestCase):
         self.assertTrue(torch.equal(features, out_features))
         self.assertTrue(torch.equal(mask, out_mask))
 
+    def test_candidate_dropout_restores_valid_candidate_when_first_is_invalid(self):
+        from exploration_stack.planning.planner_dropout import PlannerDropoutConfig, PlannerFeatureDropout
+
+        dropout = PlannerFeatureDropout(PlannerDropoutConfig(frontier_candidate_dropout_prob=1.0))
+        features = torch.ones(3, 5, 18)
+        mask = torch.tensor(
+            [
+                [False, False, True, True, False],
+                [False, True, False, False, False],
+                [True, False, False, False, False],
+            ]
+        )
+        _, out_mask = dropout(features, mask, training=True)
+        self.assertTrue(out_mask.any(dim=1).all())
+        self.assertTrue(out_mask[0, 2])
+        self.assertTrue(out_mask[1, 1])
+        self.assertTrue(out_mask[2, 0])
+
 
 if __name__ == "__main__":
     unittest.main()

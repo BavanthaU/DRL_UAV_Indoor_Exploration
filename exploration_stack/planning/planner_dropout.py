@@ -25,9 +25,10 @@ class PlannerFeatureDropout:
 
     def __call__(self, candidate_features, candidate_mask, *, training: bool = True):
         if not training:
-            return candidate_features, candidate_mask
-        features = candidate_features.clone()
+            return torch.nan_to_num(candidate_features, nan=0.0, posinf=0.0, neginf=0.0), candidate_mask
+        features = torch.nan_to_num(candidate_features.clone(), nan=0.0, posinf=0.0, neginf=0.0)
         mask = candidate_mask.clone()
+        original_mask = mask.clone()
         if self.cfg.planner_dropout_prob > 0.0:
             planner_mask = torch.rand(features.shape[:2], device=features.device) < self.cfg.planner_dropout_prob
             features[..., 8:12] = features[..., 8:12].masked_fill(planner_mask.unsqueeze(-1), 0.0)
@@ -38,4 +39,12 @@ class PlannerFeatureDropout:
             candidate_drop = torch.rand(mask.shape, device=mask.device) < self.cfg.frontier_candidate_dropout_prob
             candidate_drop[:, 0] = False
             mask &= ~candidate_drop
+            empty = ~mask.any(dim=1)
+            if empty.any():
+                restore_idx = original_mask.float().argmax(dim=1)
+                rows = torch.nonzero(empty, as_tuple=False).flatten()
+                mask[rows, restore_idx[rows]] = original_mask[rows, restore_idx[rows]]
+                still_empty = ~mask.any(dim=1)
+                if still_empty.any():
+                    mask[still_empty, 0] = True
         return features, mask
