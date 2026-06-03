@@ -1,0 +1,10 @@
+semantic_reasoner: heuristic_default
+w_info: 0.55
+w_depth_open: 0.15
+w_door: 0.15
+w_corridor: 0.10
+w_risk: 0.20
+max_expected_gain: 50.0
+notes: >
+  Dependency-free reasoner for smoke tests and ablations. It uses occupancy,
+  depth line, semantic line, frontier shape, and ESDF risk when available.

@@ -1,0 +1,19 @@
+robot_backend: isaaclab_quadcopter
+control_mode: velocity_body
+slam_backend: isaac_ros_visual_slam
+mapping_backend: nvblox
+semantic_reasoner: semantic_prior_net
+optional_lowrate_vlm: disabled
+local_controller: goal_conditioned_local_policy
+global_planner: frontier_graph
+policy_rate_hz: 4
+global_replan_rate_hz: 0.2
+semantic_reasoner_rate_hz: 0.1
+safety_shield: enabled
+use_tensorRT: true
+map_resolution_m: 0.10
+frontier_min_cluster_size: 5
+esdf_safety_radius_m: 0.45
+use_semantic_grid: true
+notes: >
+  Deployment target. Runtime should not require a large VLM at control rate.

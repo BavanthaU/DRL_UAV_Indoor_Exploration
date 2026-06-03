@@ -8,6 +8,10 @@ conda activate env_isaaclab
 cd /home/bavantha/Autonomous_Drone
 python -m pip install -r requirements.txt
 
+# Four-layer architecture smoke test without Isaac/ROS/VLM
+python scripts/run_four_layer_smoke_test.py --steps 5
+python -m unittest discover -s tests
+
 # Start SAC training without IL
 CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/train_exploration.py \
   --enable_cameras \

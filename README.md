@@ -30,6 +30,13 @@ This repository contains several important directories:
     - `mdp/` – Implementation of **MDP components**, including rewards, termination conditions, events, observations, and actions.
     - `utils/` – Utility scripts for RL, including SB3 wrappers for Isaac Lab, RL architectures, and an occupancy map module.
 
+- **`exploration_stack/`** – Four-layer research architecture for the next no-demo exploration direction:
+  - robot adapters,
+  - SLAM and mapping interfaces,
+  - semantic VLM/LLM/heuristic frontier priors,
+  - hierarchical global-local planning,
+  - dependency-free smoke-test implementations.
+
 - **`trained_model_and_trajectories/`** – Contains all trained IL and RL models as well as expert trajectories.
 
 
@@ -63,6 +70,19 @@ Install this project's extra dependencies:
 cd /home/bavantha/Autonomous_Drone
 python -m pip install -r requirements.txt
 ```
+
+## Four-layer exploration stack
+The current IL/SAC training path is preserved. A new parallel architecture has
+been added for future no-imitation-learning exploration work:
+
+```sh
+python scripts/run_four_layer_smoke_test.py --steps 5
+python -m unittest discover -s tests
+```
+
+The smoke test uses mocked robot/SLAM/map providers and does not require Isaac
+Sim, ROS 2, or a VLM. See `docs/four_layer_architecture.md` for the layer
+interfaces, data flow, config files, stubs, and next implementation steps.
 
 If you need the tracked model/checkpoint files, install Git LFS before cloning:
 ```sh

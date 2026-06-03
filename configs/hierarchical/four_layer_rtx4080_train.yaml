@@ -1,0 +1,19 @@
+robot_backend: existing_repo
+control_mode: velocity_body
+slam_backend: sim_ground_truth_debug
+mapping_backend: existing_fallback
+semantic_reasoner: heuristic_default
+vlm_teacher: qwen2.5-vl-7b
+local_controller: existing_il_sac
+global_planner: frontier_graph
+policy_rate_hz: 4
+global_replan_rate_hz: 0.5
+semantic_reasoner_rate_hz: 0.2
+map_resolution_m: 0.10
+frontier_min_cluster_size: 5
+esdf_safety_radius_m: 0.45
+use_semantic_grid: true
+use_ground_truth_pose_for_debug: true
+notes: >
+  Smoke-test/training-machine architecture config. Ground-truth SLAM is debug
+  only and must be replaced before fair no-IL benchmarking.

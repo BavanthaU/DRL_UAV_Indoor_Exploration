@@ -1,0 +1,11 @@
+semantic_reasoner: vlm_lowrate_optional
+model_name: HuggingFaceTB/SmolVLM2-2.2B-Instruct
+mode: optional_lowrate_jetson
+cache_dir: data/semantic_priors/cache
+max_new_tokens: 256
+run_rate_hz: 0.1
+quantization: int4_or_int8_when_supported
+fallback_reasoner: semantic_prior_net
+notes: >
+  Optional low-rate Jetson path. Default deployment should use a distilled
+  SemanticPriorNet or heuristic fallback rather than depending on this model.

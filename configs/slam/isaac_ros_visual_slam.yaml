@@ -1,0 +1,13 @@
+slam_backend: isaac_ros_visual_slam
+use_ground_truth_pose_for_debug: false
+ros2:
+  rgb_topic: /camera/color/image_raw
+  depth_topic: /camera/depth/image_raw
+  imu_topic: /imu
+  pose_topic: /visual_slam/tracking/pose
+  map_frame: map
+  base_frame: base_link
+  camera_frame: camera_optical
+notes: >
+  Requires ROS 2 and Isaac ROS Visual SLAM/cuVSLAM. The repository imports this
+  backend safely but does not require ROS 2 for unit tests.

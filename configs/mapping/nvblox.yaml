@@ -1,0 +1,13 @@
+mapping_backend: nvblox
+map_resolution_m: 0.10
+frontier_min_cluster_size: 5
+esdf_safety_radius_m: 0.45
+use_semantic_grid: true
+ros2:
+  esdf_topic: /nvblox_node/esdf
+  occupancy_topic: /nvblox_node/occupancy_grid
+  semantic_topic: /semantic_grid
+  map_frame: map
+notes: >
+  Requires ROS 2 and Isaac ROS Nvblox. Use mapping_backend=existing_fallback for
+  no-ROS smoke tests.
