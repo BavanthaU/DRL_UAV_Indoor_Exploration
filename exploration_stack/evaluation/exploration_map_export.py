@@ -118,6 +118,66 @@ def capture_exploration_map(env, env_id: int) -> ExplorationMapSnapshot | None:
     return None
 
 
+def maybe_log_training_exploration_map(
+    logger,
+    env,
+    *,
+    update: int,
+    timesteps: int,
+    metrics: dict[str, Any],
+) -> dict[str, float]:
+    """Log one vectorized agent's internal explored map during training when W&B is enabled."""
+
+    interval = int(logger.wandb_config_value("train_map_interval", 10))
+    if interval <= 0 or update % interval != 0:
+        return {}
+    if not logger.should_log_artifact("log_train_maps"):
+        return {}
+    num_envs = max(1, int(getattr(env, "num_envs", 1)))
+    env_id = min(max(0, int(logger.wandb_config_value("train_map_env_id", 0))), num_envs - 1)
+    snapshot = capture_exploration_map(env, env_id)
+    if snapshot is None:
+        return {}
+    image_size = int(logger.wandb_config_value("train_map_image_size", 512))
+    rollout_mean_reward = float(metrics.get("rollout/mean_reward", 0.0))
+    metadata = {
+        **snapshot.metadata(),
+        "episode_return": rollout_mean_reward,
+        "phase": "train",
+        "rollout_mean_reward": rollout_mean_reward,
+        "selection": "configured_train_map_env",
+        "timesteps": int(timesteps),
+        "update": int(update),
+    }
+    map_dir = logger.run_dir / "train_maps"
+    map_path = save_exploration_map_png(
+        snapshot,
+        map_dir / f"update_{update:06d}_env_{env_id:03d}.png",
+        image_size=image_size,
+        metadata=metadata,
+    )
+    write_exploration_map_metadata(
+        snapshot,
+        map_dir / f"update_{update:06d}_env_{env_id:03d}.json",
+        extra=metadata,
+    )
+    logger.log_image(
+        "train/explored_map",
+        map_path,
+        step=update,
+        caption=(
+            f"update={update}, env={env_id}, mapped_free_cells={snapshot.mapped_free_cells:.0f}, "
+            f"frontier_count={snapshot.frontier_count:.0f}"
+        ),
+        enabled_key="log_train_maps",
+    )
+    return {
+        "train_map/env_id": float(env_id),
+        "train_map/frontier_count": float(snapshot.frontier_count),
+        "train_map/mapped_free_cells": float(snapshot.mapped_free_cells),
+    }
+
+
 def save_exploration_map_png(
     snapshot: ExplorationMapSnapshot,
     path: str | Path,

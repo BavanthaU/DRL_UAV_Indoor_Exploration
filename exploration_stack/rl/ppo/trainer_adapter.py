@@ -14,6 +14,7 @@ except ImportError:  # pragma: no cover
 from .base import PPOTrainResult, TrainerAdapter
 from .rollout_logging import StructuredRunLogger
 from .vlm_actor_critic import VLMActorCritic
+from exploration_stack.evaluation import maybe_log_training_exploration_map
 from exploration_stack.tasks.vlm_ppo_exploration.reward_normalizer import RewardNormalizer
 
 
@@ -71,6 +72,15 @@ class TorchPPOTrainerAdapter(TrainerAdapter):
             reward_terms = rollout.get("reward_terms", {})
             for key, value in reward_terms.items():
                 metrics[f"reward/{key}"] = float(value)
+            metrics.update(
+                maybe_log_training_exploration_map(
+                    self.logger,
+                    env,
+                    update=update,
+                    timesteps=total_timesteps,
+                    metrics=metrics,
+                )
+            )
             self.logger.log(update, metrics)
             last_metrics = metrics
         return PPOTrainResult(timesteps=total_timesteps, updates=max_iterations, metrics=last_metrics)

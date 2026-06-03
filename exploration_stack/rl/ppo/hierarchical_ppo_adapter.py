@@ -16,6 +16,7 @@ from exploration_stack.hierarchy import (
     OptionManager,
     OptionManagerConfig,
 )
+from exploration_stack.evaluation import maybe_log_training_exploration_map
 from exploration_stack.tasks.vlm_ppo_exploration.reward_normalizer import RewardNormalizer
 
 from .base import PPOTrainResult, TrainerAdapter
@@ -84,6 +85,15 @@ class HierarchicalPPOTrainerAdapter(TrainerAdapter):
             metrics["timesteps"] = total_timesteps
             for key, value in rollout.get("reward_terms", {}).items():
                 metrics[f"reward/{key}"] = float(value)
+            metrics.update(
+                maybe_log_training_exploration_map(
+                    self.logger,
+                    env,
+                    update=update,
+                    timesteps=total_timesteps,
+                    metrics=metrics,
+                )
+            )
             self.logger.log(update, metrics)
             last_metrics = metrics
         return PPOTrainResult(timesteps=total_timesteps, updates=max_iterations, metrics=last_metrics)

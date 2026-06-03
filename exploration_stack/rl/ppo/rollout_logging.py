@@ -84,6 +84,9 @@ class StructuredRunLogger:
             return
         self._wandb_run.log({key: self._wandb.Image(str(image_path), caption=caption)}, step=int(step))
 
+    def wandb_config_value(self, key: str, default: Any = None) -> Any:
+        return self._wandb_config.get(key, default)
+
     def should_log_artifact(self, enabled_key: str | None = None) -> bool:
         if self._wandb_run is None:
             return False

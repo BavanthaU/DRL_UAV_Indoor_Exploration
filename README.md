@@ -108,6 +108,14 @@ cd /home/bavantha/IsaacLab
 Use `--wandb_mode disabled` for local-only runs or `--wandb_mode offline` for
 offline W&B logging.
 
+## Training Map Upload
+
+During W&B-enabled training, the trainer uploads one live explored-map image as
+`train/explored_map` every `wandb.train_map_interval` PPO updates. By default it
+uses vectorized environment `0`, saves local files under `train_maps/`, and logs
+only the agent's internal map state. Change `wandb.train_map_env_id`,
+`wandb.train_map_interval`, or `wandb.log_train_maps` in the config if needed.
+
 ## Evaluation Map Upload
 
 Evaluation writes `eval_maps/best_explored_map.png` and uploads it to W&B as
