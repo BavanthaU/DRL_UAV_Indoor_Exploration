@@ -17,5 +17,5 @@ CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/train_expl
   --enable_cameras \
   --num_envs 10 \
   --headless \
-  --task Drone_SAC_no_IL_V1 \
+  --task Drone_SAC_no_IL_MapProgress_V1 \
   --wandb_mode disabled

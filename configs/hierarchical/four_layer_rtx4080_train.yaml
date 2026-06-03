@@ -5,7 +5,9 @@ mapping_backend: existing_fallback
 semantic_reasoner: heuristic_default
 vlm_teacher: qwen2.5-vl-7b
 local_controller: existing_il_sac
+rl_task: Drone_SAC_no_IL_MapProgress_V1
 global_planner: frontier_graph
+reward_policy: map_progress_no_marked_rooms
 policy_rate_hz: 4
 global_replan_rate_hz: 0.5
 semantic_reasoner_rate_hz: 0.2

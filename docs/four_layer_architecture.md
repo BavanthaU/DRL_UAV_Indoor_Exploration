@@ -148,6 +148,13 @@ python -m compileall -q isaac45 imitation_learning
 
 These checks do not require Isaac Sim, ROS 2, or VLM dependencies.
 
+## Reward Integrity
+
+The new RL path must not use hard-coded room IDs, doorway coordinates, or
+scene-specific coordinate ranges as reward. Use `Drone_SAC_no_IL_MapProgress_V1`
+for new no-IL training. Historical thesis tasks remain registered only for
+reproduction/comparison. See `docs/reward_design.md`.
+
 ## Remaining Work
 
 Immediate implementation:

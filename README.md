@@ -84,6 +84,10 @@ The smoke test uses mocked robot/SLAM/map providers and does not require Isaac
 Sim, ROS 2, or a VLM. See `docs/four_layer_architecture.md` for the layer
 interfaces, data flow, config files, stubs, and next implementation steps.
 
+For new no-imitation-learning RL experiments, use the map-progress task:
+`Drone_SAC_no_IL_MapProgress_V1`. It removes hard-coded doorway/room reward
+shortcuts from the training MDP. See `docs/reward_design.md`.
+
 If you need the tracked model/checkpoint files, install Git LFS before cloning:
 ```sh
 git lfs install
@@ -140,7 +144,7 @@ CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/train_expl
   --enable_cameras \
   --num_envs 10 \
   --headless \
-  --task Drone_SAC_no_IL_V1 \
+  --task Drone_SAC_no_IL_MapProgress_V1 \
   --wandb_mode disabled
 ```
 

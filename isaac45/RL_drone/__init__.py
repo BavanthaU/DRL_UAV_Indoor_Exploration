@@ -6,6 +6,7 @@ import gymnasium as gym
 
 from . import agents
 from . import env_config_training
+from . import env_config_training_map_progress
 from . import env_config_eval_envA
 from . import env_config_eval_envB
 from . import env_config_eval_envC
@@ -49,6 +50,26 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": env_config_training.DroneEnvCfg,
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg_v1.yaml",
+    },
+)
+
+gym.register(
+    id="Drone_SAC_no_IL_MapProgress",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": env_config_training_map_progress.DroneMapProgressEnvCfg,
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Drone_SAC_no_IL_MapProgress_V1",
+    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": env_config_training_map_progress.DroneMapProgressEnvCfg,
         "sb3_cfg_entry_point": f"{agents.__name__}:sb3_sac_cfg_v1.yaml",
     },
 )
