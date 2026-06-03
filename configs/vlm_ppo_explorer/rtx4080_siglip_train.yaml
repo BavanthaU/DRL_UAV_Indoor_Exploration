@@ -5,7 +5,7 @@
     "backend": "isaac",
     "exploration_mode": "hierarchical_frontier_guided",
     "map": {"grid_size": 64, "crop_size": 32, "resolution_m": 0.25, "sensor_radius_cells": 3, "stuck_steps": 80, "frontier_closed_steps": 12, "min_mapped_cells_for_completion": 64, "return_home_after_s": 480.0, "home_reached_radius_m": 0.75},
-    "action": {"action_mode": "body_xy_yawrate_altitude_hold", "max_vx_mps": 1.0, "max_vy_mps": 0.6, "max_yaw_rate_radps": 1.0, "target_altitude_m": 1.2, "min_altitude_m": 0.8, "max_altitude_m": 1.8}
+    "action": {"action_mode": "body_xy_yawrate_altitude_hold", "max_vx_mps": 0.6, "max_vy_mps": 0.35, "max_yaw_rate_radps": 0.8, "target_altitude_m": 1.2, "min_altitude_m": 0.6, "max_altitude_m": 2.2, "altitude_violation_steps": 4}
   },
   "vlm": {
     "backend": "siglip",

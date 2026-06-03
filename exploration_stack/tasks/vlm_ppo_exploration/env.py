@@ -16,9 +16,10 @@ except ImportError as exc:  # pragma: no cover
 
 from .env_cfg import IsaacVlmPpoUavExplorationEnvCfg
 from .intrinsic_rewards import NewCellCountCuriosity, SemanticNovelty
-from .observations import crop_grid, depth_line_from_camera, frontier_mask_from_visited
+from .mapping import depth_line_samples, integrate_depth_line_occupancy
+from .observations import crop_grid, depth_line_from_camera, frontier_mask_from_occupancy
 from .reward_terms import RewardWeights, combine_rewards, compute_extrinsic_reward
-from .terminations import altitude_out_of_bounds, local_map_complete
+from .terminations import local_map_complete, sustained_altitude_out_of_bounds
 
 
 class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
@@ -37,6 +38,7 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         self._gravity_magnitude = torch.tensor(self.sim.cfg.gravity, device=self.device).norm()
         self._robot_weight = (self._robot_mass * self._gravity_magnitude).item()
         grid_shape = (self.cfg.map_cfg.grid_size, self.cfg.map_cfg.grid_size)
+        self._map_occupancy = torch.zeros((self.num_envs, *grid_shape), dtype=torch.long, device=self.device)
         self._visited = torch.zeros((self.num_envs, *grid_shape), dtype=torch.bool, device=self.device)
         self._trajectory = torch.zeros_like(self._visited)
         self._mapped_free_cells = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
@@ -45,6 +47,9 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         self._home_xy_w = torch.zeros(self.num_envs, 2, dtype=torch.float32, device=self.device)
         self._prev_home_distance = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self._stuck_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._altitude_low_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._altitude_high_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self._last_altitude_counter_step = -1
         self._new_cell_curiosity = NewCellCountCuriosity(
             self.num_envs,
             grid_shape,
@@ -95,6 +100,8 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
                 "invalid_quaternion",
                 "invalid_map_bounds",
                 "invalid_altitude",
+                "invalid_altitude_low",
+                "invalid_altitude_high",
                 "invalid_linear_speed",
                 "invalid_angular_speed",
             ]
@@ -149,7 +156,10 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         )
         self._thrust[:, 0, 0] = force_xy[:, 0]
         self._thrust[:, 0, 1] = force_xy[:, 1]
-        self._thrust[:, 0, 2] = z_force.clamp(0.0, 2.5 * self._robot_weight)
+        self._thrust[:, 0, 2] = z_force.clamp(
+            self.cfg.action_cfg.min_thrust_to_weight * self._robot_weight,
+            self.cfg.action_cfg.max_thrust_to_weight * self._robot_weight,
+        )
         yaw_rate_cmd = self._actions[:, 2] * self.cfg.action_cfg.max_yaw_rate_radps
         yaw_rate_error = yaw_rate_cmd - root_ang_vel_w[:, 2]
         max_rp_torque = float(self.cfg.action_cfg.max_roll_pitch_torque_nm)
@@ -174,16 +184,17 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
 
     def _get_observations(self) -> dict:
         self._update_map_memory()
+        self._prime_initial_observation_maps()
         rgb = torch.nan_to_num(self._tiled_camera.data.output["rgb"].float(), nan=0.0, posinf=255.0, neginf=0.0) / 255.0
         rgb = rgb[..., :3].permute(0, 3, 1, 2).contiguous()
         depth = self._tiled_camera.data.output.get("depth")
-        depth_line = depth_line_from_camera(depth, width=64)
+        depth_line = depth_line_from_camera(depth, width=64, max_depth_m=self.cfg.map_cfg.depth_max_range_m)
         if depth_line is None:
             depth_line = torch.zeros(self.num_envs, 64, device=self.device)
         root_pos_w = self._safe_root_pos_w()
         centers = self._world_to_grid(root_pos_w[:, :2])
-        occupancy = self._visited.to(torch.long)
-        frontier = frontier_mask_from_visited(self._visited)
+        occupancy = self._map_occupancy
+        frontier = frontier_mask_from_occupancy(occupancy)
         obs = {
             "camera_rgb": rgb,
             "map_crop": crop_grid(occupancy, centers, self.cfg.map_cfg.crop_size),
@@ -199,7 +210,7 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         invalid_terms = self._invalid_state_terms()
         invalid_state = self._combine_invalid_terms(invalid_terms)
         root_pos_w = self._safe_root_pos_w()
-        occupancy = self._visited.to(torch.long)
+        occupancy = self._map_occupancy
         new_cell_reward, new_counts = self._new_cell_curiosity.update(occupancy)
         self._stuck_counter = torch.where(
             (new_counts > 0) | invalid_state,
@@ -216,7 +227,7 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         yaw_flip = torch.sign(self._actions[:, 2]) != torch.sign(self._prev_actions[:, 2])
         yaw_flip &= torch.abs(self._actions[:, 2]) > 0.1
         yaw_flip &= torch.abs(self._prev_actions[:, 2]) > 0.1
-        frontier = frontier_mask_from_visited(self._visited)
+        frontier = frontier_mask_from_occupancy(self._map_occupancy)
         frontier_count = frontier.flatten(start_dim=1).sum(dim=1).float()
         frontier_closed_now = (frontier_count <= 0) & (
             self._mapped_free_cells >= self.cfg.map_cfg.min_mapped_cells_for_completion
@@ -287,15 +298,10 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        invalid_state = self._invalid_state_mask()
+        invalid_state = self._invalid_state_mask(update_altitude_counters=True)
         root_pos_w = self._safe_root_pos_w()
         time_out = self.episode_length_buf >= self.max_episode_length - 1
-        altitude_done = altitude_out_of_bounds(
-            self._robot.data.root_pos_w[:, 2],
-            self.cfg.action_cfg.min_altitude_m,
-            self.cfg.action_cfg.max_altitude_m,
-        )
-        frontier = frontier_mask_from_visited(self._visited)
+        frontier = frontier_mask_from_occupancy(self._map_occupancy)
         frontier_count = frontier.flatten(start_dim=1).sum(dim=1).float()
         frontier_complete = local_map_complete(
             frontier_count,
@@ -305,7 +311,7 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         home_distance = torch.linalg.norm(root_pos_w[:, :2] - self._home_xy_w, dim=-1)
         returned_home = self._return_home_phase() & (home_distance <= self.cfg.map_cfg.home_reached_radius_m)
         stuck = self._stuck_counter >= self.cfg.map_cfg.stuck_steps
-        return invalid_state | altitude_done | frontier_complete | returned_home | stuck, time_out
+        return invalid_state | frontier_complete | returned_home | stuck, time_out
 
     def _reset_idx(self, env_ids: torch.Tensor | None):
         if env_ids is None or len(env_ids) == self.num_envs:
@@ -315,6 +321,7 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
         self._actions[env_ids] = 0.0
         self._prev_actions[env_ids] = 0.0
+        self._map_occupancy[env_ids] = 0
         self._visited[env_ids] = False
         self._trajectory[env_ids] = False
         self._mapped_free_cells[env_ids] = 0.0
@@ -322,6 +329,8 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         self._frontier_closed_counter[env_ids] = 0
         self._prev_home_distance[env_ids] = 0.0
         self._stuck_counter[env_ids] = 0
+        self._altitude_low_counter[env_ids] = 0
+        self._altitude_high_counter[env_ids] = 0
         self._new_cell_curiosity.reset(env_ids)
         self._semantic_novelty.reset(env_ids)
         joint_pos = self._robot.data.default_joint_pos[env_ids]
@@ -334,9 +343,9 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         self._robot.write_root_pose_to_sim(root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(torch.zeros_like(root_state[:, 7:]), env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
-        self._update_map_memory(env_ids=env_ids)
+        self._mark_robot_cells_free(env_ids)
         self._prev_mapped_free_cells[env_ids] = self._mapped_free_cells[env_ids]
-        self._new_cell_curiosity.prime(self._visited, env_ids)
+        self._new_cell_curiosity.prime(self._map_occupancy, env_ids)
         self._stuck_counter[env_ids] = 0
 
     def _update_map_memory(self, env_ids: torch.Tensor | None = None):
@@ -346,17 +355,58 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
             ids = env_ids.to(self.device).long()
         else:
             ids = torch.tensor(env_ids, dtype=torch.long, device=self.device)
+        self._mark_robot_cells_free(ids)
+        depth = self._tiled_camera.data.output.get("depth") if hasattr(self, "_tiled_camera") else None
+        distances, hit_mask = depth_line_samples(
+            depth,
+            width=int(self.cfg.map_cfg.depth_ray_count),
+            min_depth_m=float(self.cfg.map_cfg.depth_min_range_m),
+            max_depth_m=float(self.cfg.map_cfg.depth_max_range_m),
+        )
+        if distances is not None and hit_mask is not None:
+            centers = self._world_to_grid(self._safe_root_pos_w()[:, :2])
+            yaw = self._root_yaw_w()
+            integrate_depth_line_occupancy(
+                self._map_occupancy,
+                self._trajectory,
+                centers,
+                yaw,
+                distances,
+                hit_mask,
+                resolution_m=float(self.cfg.map_cfg.resolution_m),
+                max_range_m=float(self.cfg.map_cfg.depth_max_range_m),
+                horizontal_fov_rad=float(self.cfg.map_cfg.depth_horizontal_fov_rad),
+            )
+        self._sync_visited_from_occupancy()
+        new_counts = (self._map_occupancy == 1).flatten(start_dim=1).sum(dim=1)
+        self._mapped_free_cells = new_counts.float()
+
+    def _mark_robot_cells_free(self, env_ids):
         centers = self._world_to_grid(self._safe_root_pos_w()[:, :2])
-        radius = self.cfg.map_cfg.sensor_radius_cells
-        for env_id in ids.tolist():
+        radius = max(0, min(int(self.cfg.map_cfg.sensor_radius_cells), 1))
+        for env_id in env_ids.tolist():
             row = int(centers[env_id, 0].item())
             col = int(centers[env_id, 1].item())
             row0, row1 = max(0, row - radius), min(self.cfg.map_cfg.grid_size, row + radius + 1)
             col0, col1 = max(0, col - radius), min(self.cfg.map_cfg.grid_size, col + radius + 1)
-            self._visited[env_id, row0:row1, col0:col1] = True
+            self._map_occupancy[env_id, row0:row1, col0:col1] = 1
             self._trajectory[env_id, row, col] = True
-        new_counts = self._visited.flatten(start_dim=1).sum(dim=1)
-        self._mapped_free_cells = new_counts.float()
+        self._sync_visited_from_occupancy()
+        self._mapped_free_cells = (self._map_occupancy == 1).flatten(start_dim=1).sum(dim=1).float()
+
+    def _prime_initial_observation_maps(self):
+        reset_envs = torch.nonzero(self.episode_length_buf <= 0, as_tuple=False).flatten()
+        if reset_envs.numel() == 0:
+            return
+        self._new_cell_curiosity.prime(self._map_occupancy, reset_envs)
+        self._prev_mapped_free_cells[reset_envs] = self._mapped_free_cells[reset_envs]
+
+    def _sync_visited_from_occupancy(self):
+        self._visited[:] = self._map_occupancy == 1
+
+    def _root_yaw_w(self):
+        rot = matrix_from_quat(self._safe_root_quat_w())
+        return torch.atan2(rot[:, 1, 0], rot[:, 0, 0])
 
     def _world_to_grid(self, xy_w):
         xy_w = torch.where(torch.isfinite(xy_w), xy_w, self._terrain.env_origins[:, :2])
@@ -407,10 +457,12 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
             self.extras["log"][f"Episode/{key}"] = float(episode_values.mean().detach().cpu())
             values[env_ids] = 0.0
 
-    def _invalid_state_mask(self):
-        return self._combine_invalid_terms(self._invalid_state_terms())
+    def _invalid_state_mask(self, *, update_altitude_counters: bool = False):
+        return self._combine_invalid_terms(
+            self._invalid_state_terms(update_altitude_counters=update_altitude_counters)
+        )
 
-    def _invalid_state_terms(self):
+    def _invalid_state_terms(self, *, update_altitude_counters: bool = False):
         root_pos_w = self._robot.data.root_pos_w
         root_quat_w = self._robot.data.root_quat_w
         root_lin_vel_w = self._robot.data.root_lin_vel_w
@@ -428,8 +480,8 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         )
         altitude = root_pos_w[:, 2]
         invalid_map_bounds = finite_pos & (local_xy > self._map_radius_limit_m())
-        invalid_altitude = torch.isfinite(altitude) & (
-            (altitude < self.cfg.action_cfg.min_altitude_m) | (altitude > self.cfg.action_cfg.max_altitude_m)
+        invalid_altitude, invalid_altitude_low, invalid_altitude_high = self._altitude_invalid_terms(
+            altitude, update_counters=update_altitude_counters
         )
         finite_lin_vel = torch.isfinite(root_lin_vel_w).all(dim=-1)
         finite_ang_vel = torch.isfinite(root_ang_vel_w).all(dim=-1)
@@ -442,14 +494,51 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
             "invalid_quaternion": invalid_quaternion,
             "invalid_map_bounds": invalid_map_bounds,
             "invalid_altitude": invalid_altitude,
+            "invalid_altitude_low": invalid_altitude_low,
+            "invalid_altitude_high": invalid_altitude_high,
             "invalid_linear_speed": invalid_linear_speed,
             "invalid_angular_speed": invalid_angular_speed,
         }
 
+    def _altitude_invalid_terms(self, altitude, *, update_counters: bool):
+        if update_counters and self._last_altitude_counter_step != int(self.common_step_counter):
+            (
+                invalid_altitude,
+                invalid_altitude_low,
+                invalid_altitude_high,
+                low_counter,
+                high_counter,
+            ) = sustained_altitude_out_of_bounds(
+                altitude,
+                self.cfg.action_cfg.min_altitude_m,
+                self.cfg.action_cfg.max_altitude_m,
+                self._altitude_low_counter,
+                self._altitude_high_counter,
+                self.cfg.action_cfg.altitude_violation_steps,
+            )
+            self._altitude_low_counter[:] = low_counter
+            self._altitude_high_counter[:] = high_counter
+            self._last_altitude_counter_step = int(self.common_step_counter)
+            return invalid_altitude, invalid_altitude_low, invalid_altitude_high
+
+        finite_altitude = torch.isfinite(altitude)
+        invalid_altitude_low = finite_altitude & (altitude < self.cfg.action_cfg.min_altitude_m)
+        invalid_altitude_high = finite_altitude & (altitude > self.cfg.action_cfg.max_altitude_m)
+        required_steps = max(1, int(self.cfg.action_cfg.altitude_violation_steps))
+        invalid_altitude = (
+            (~finite_altitude)
+            | (self._altitude_low_counter >= required_steps)
+            | (self._altitude_high_counter >= required_steps)
+        )
+        return invalid_altitude, invalid_altitude_low, invalid_altitude_high
+
     @staticmethod
     def _combine_invalid_terms(invalid_terms):
+        diagnostic_only = {"invalid_altitude_low", "invalid_altitude_high"}
         invalid = None
-        for value in invalid_terms.values():
+        for key, value in invalid_terms.items():
+            if key in diagnostic_only:
+                continue
             invalid = value.clone() if invalid is None else invalid | value
         return invalid
 

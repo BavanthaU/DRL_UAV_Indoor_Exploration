@@ -27,9 +27,22 @@ Rewards are based on actual exploration progress and safety:
 - optional intrinsic terms from the existing flat debug/Isaac task.
 
 The task does not receive predefined region identifiers, fixed coordinate success
-regions, target area percentages, known free-cell totals, or coordinate-specific
+regions, target area percentages, environment free-cell totals, or coordinate-specific
 entry rewards. For a 10 minute mission, the main configs switch to return-home
 behavior after 480 seconds so the last 2 minutes are reserved for recovery.
+
+## Map Source
+
+The Isaac task keeps an agent-side occupancy map with unknown, observed-free,
+and observed-obstacle cells. It is integrated online from the tiled camera depth
+line and root pose history, then used for frontier/opening masks, map-progress
+reward, W&B map images, and completion checks.
+
+Scene-level occupancy-map generation from the USD stage is deliberately not used
+for training because it would expose environment geometry before the UAV observes
+it. The current mapper is a lightweight 2D depth-ray mapper rather than a full
+loop-closing SLAM backend. A ROS2 SLAM integration can be added as a deployment
+or evaluation path, while keeping rewards tied to the agent-side map.
 
 ## Main Config
 
@@ -45,6 +58,7 @@ Important defaults:
 - `astar_feature_dropout_prob: 0.2`
 - `frontier_candidate_dropout_prob: 0.1`
 - `return_home_after_s: 480.0`
+- `altitude_violation_steps: 4`
 
 ## Baselines and Ablations
 
@@ -137,3 +151,5 @@ python scripts/train_vlm_hierarchical_ppo_explorer.py --config configs/vlm_hiera
   optimized jointly in one PPO loss.
 - Real MobileCLIP/SigLIP runs require model dependencies and Isaac Lab launch
   through `isaaclab.sh -p`.
+- The online mapper is 2D and depth-ray based; it does not yet perform dense
+  multi-view fusion, loop closure, or global pose-graph correction.

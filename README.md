@@ -30,8 +30,11 @@ main hierarchical PPO trainer.
 - Planner dropout defaults for the main run:
   `planner_dropout_prob=0.2`, `astar_feature_dropout_prob=0.2`,
   `frontier_candidate_dropout_prob=0.1`.
+- Agent-side occupancy mapping from Isaac depth images: unknown cells, observed
+  free cells, observed obstacle endpoints, trajectory, and frontier/opening
+  masks are maintained from the UAV's own camera and pose history.
 - Unknown-environment completion: the reward/termination path does not receive
-  target area percentages or known free-cell totals; it uses local map progress,
+  target area percentages or environment free-cell totals; it uses local map progress,
   frontier/opening closure, and return-to-start timing.
 - Mission reserve behavior: the main configs use a 10 minute episode and switch
   to return-start behavior after 480 seconds.
@@ -108,6 +111,20 @@ cd /home/bavantha/IsaacLab
 Use `--wandb_mode disabled` for local-only runs or `--wandb_mode offline` for
 offline W&B logging.
 
+## Map Source and SLAM Boundary
+
+The Isaac training task does not use a scene-level occupancy map as policy input
+or reward state. Isaac Sim/Isaac Lab provide the simulated camera, depth image,
+pose, physics, and collisions; the exploration map stored in `_map_occupancy` is
+integrated online from the UAV's depth camera rays and pose history.
+
+Isaac's occupancy-map tooling is useful for offline scene inspection, but it is
+not used here because it derives geometry from the USD scene instead of from the
+agent's onboard observations. That would break the unknown-environment contract.
+The current mapper is a lightweight 2D depth-ray occupancy mapper, not a full
+loop-closing SLAM system. A ROS2 SLAM backend can be added later for deployment
+or evaluation, but the RL reward should still depend only on the agent-side map.
+
 ## Training Map Upload
 
 During W&B-enabled training, the trainer uploads one live explored-map image as
@@ -122,9 +139,10 @@ Use `reward/new_cells` and `reward/mapped_cell_delta` to check whether the agent
 is earning progress after the reset/start observation. The start patch is
 baselined and should not appear as exploration reward. If exploration stalls,
 check `reward/invalid_*`: angular-speed failures indicate controller instability,
-altitude failures indicate vertical control or action-distribution problems, and
-map-bound failures indicate the agent left the represented local map. Trainer
-CSV reward terms are rollout sums of per-step vectorized means, so divide by the
+`reward/invalid_altitude_low` and `reward/invalid_altitude_high` are instantaneous
+altitude diagnostics, `reward/invalid_altitude` is a sustained altitude reset, and
+map-bound failures indicate the agent left the represented local map. Trainer CSV
+reward terms are rollout sums of per-step vectorized means, so divide by the
 rollout length when you want the approximate per-step value.
 
 ## Evaluation Map Upload

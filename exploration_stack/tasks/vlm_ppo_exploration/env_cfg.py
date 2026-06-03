@@ -4,10 +4,11 @@ from pathlib import Path
 
 try:
     import isaaclab.sim as sim_utils
+    from isaaclab.assets import ArticulationCfg
     from isaaclab.envs import DirectRLEnvCfg, ViewerCfg
     from isaaclab.scene import InteractiveSceneCfg
     from isaaclab.sensors import TiledCameraCfg
-    from isaaclab.sim import SimulationCfg
+    from isaaclab.sim import PhysxCfg, SimulationCfg
     from isaaclab.terrains import TerrainImporterCfg
     from isaaclab.utils import configclass
     from isaaclab_assets import CRAZYFLIE_CFG
@@ -29,15 +30,18 @@ class VlmPpoActionCfg:
     max_vy_mps: float = 0.6
     max_yaw_rate_radps: float = 1.0
     target_altitude_m: float = 1.2
-    min_altitude_m: float = 0.8
-    max_altitude_m: float = 1.8
+    min_altitude_m: float = 0.6
+    max_altitude_m: float = 2.2
     kp_xy_velocity: float = 1.8
-    kp_z: float = 9.0
-    kd_z: float = 4.0
+    kp_z: float = 18.0
+    kd_z: float = 8.0
     kp_yaw_rate: float = 0.001
     angular_damping: float = 0.0002
     max_roll_pitch_torque_nm: float = 0.003
     max_yaw_torque_nm: float = 0.003
+    min_thrust_to_weight: float = 0.05
+    max_thrust_to_weight: float = 3.5
+    altitude_violation_steps: int = 4
 
 
 @configclass
@@ -46,6 +50,10 @@ class VlmPpoMapCfg:
     crop_size: int = 32
     resolution_m: float = 0.25
     sensor_radius_cells: int = 3
+    depth_ray_count: int = 64
+    depth_min_range_m: float = 0.1
+    depth_max_range_m: float = 6.0
+    depth_horizontal_fov_rad: float = 1.84
     stuck_steps: int = 80
     frontier_closed_steps: int = 12
     min_mapped_cells_for_completion: int = 64
@@ -94,6 +102,10 @@ class IsaacVlmPpoUavExplorationEnvCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1 / 100,
         render_interval=decimation,
+        physx=PhysxCfg(
+            min_velocity_iteration_count=1,
+            enable_external_forces_every_iteration=True,
+        ),
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
@@ -116,7 +128,19 @@ class IsaacVlmPpoUavExplorationEnvCfg(DirectRLEnvCfg):
         ),
         debug_vis=False,
     )
-    robot = CRAZYFLIE_CFG.replace(prim_path="/World/envs/env_.*/Robot")
+    robot = CRAZYFLIE_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot",
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 1.2),
+            joint_pos={".*": 0.0},
+            joint_vel={
+                "m1_joint": 200.0,
+                "m2_joint": -200.0,
+                "m3_joint": 200.0,
+                "m4_joint": -200.0,
+            },
+        ),
+    )
     tiled_camera: TiledCameraCfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/Robot/body/Camera",
         offset=TiledCameraCfg.OffsetCfg(pos=(0.08, 0.0, 0.02), rot=(1.0, 0.0, 0.0, 0.0), convention="world"),

@@ -22,7 +22,16 @@ def crop_grid(grid, centers, crop_size: int):
 
 def frontier_mask_from_visited(visited):
     free = visited.bool()
-    unknown = ~free
+    return frontier_mask_from_free_unknown(free, ~free)
+
+
+def frontier_mask_from_occupancy(occupancy, *, unknown_value: int = 0, free_value: int = 1):
+    free = occupancy == free_value
+    unknown = occupancy == unknown_value
+    return frontier_mask_from_free_unknown(free, unknown)
+
+
+def frontier_mask_from_free_unknown(free, unknown):
     frontier = torch.zeros_like(free)
     for d_row, d_col in ((-1, 0), (1, 0), (0, -1), (0, 1)):
         shifted = torch.roll(unknown, shifts=(d_row, d_col), dims=(1, 2))

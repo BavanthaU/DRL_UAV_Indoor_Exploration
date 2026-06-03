@@ -111,7 +111,7 @@ def capture_exploration_map(env, env_id: int) -> ExplorationMapSnapshot | None:
     """Capture the agent's current map memory without using hidden environment priors."""
 
     base_env = _unwrap_env(env)
-    if hasattr(base_env, "_known_map"):
+    if hasattr(base_env, "_agent_map"):
         return _capture_debug_map(base_env, env_id)
     if hasattr(base_env, "_visited"):
         return _capture_isaac_map(base_env, env_id)
@@ -225,7 +225,7 @@ def write_exploration_map_metadata(
 
 
 def _capture_debug_map(env, env_id: int) -> ExplorationMapSnapshot:
-    occupancy = env._known_map[env_id].detach().clone().to("cpu").long()
+    occupancy = env._agent_map[env_id].detach().clone().to("cpu").long()
     frontier = env._frontier_mask()[env_id].detach().clone().to("cpu").bool()
     trajectory = env._trajectory[env_id].detach().clone().to("cpu").bool()
     center = env._centers()[env_id].detach().clone().to("cpu").float()
@@ -243,11 +243,18 @@ def _capture_debug_map(env, env_id: int) -> ExplorationMapSnapshot:
 
 
 def _capture_isaac_map(env, env_id: int) -> ExplorationMapSnapshot:
-    from exploration_stack.tasks.vlm_ppo_exploration.observations import frontier_mask_from_visited
+    from exploration_stack.tasks.vlm_ppo_exploration.observations import frontier_mask_from_occupancy, frontier_mask_from_visited
 
-    visited = env._visited.detach().clone()
-    occupancy = visited[env_id].to("cpu").long()
-    frontier = frontier_mask_from_visited(visited)[env_id].detach().clone().to("cpu").bool()
+    if hasattr(env, "_map_occupancy"):
+        occupancy_all = env._map_occupancy.detach().clone()
+        occupancy = occupancy_all[env_id].to("cpu").long()
+        frontier = frontier_mask_from_occupancy(occupancy_all)[env_id].detach().clone().to("cpu").bool()
+        mapped_free_cells = float((occupancy == 1).sum().item())
+    else:
+        visited = env._visited.detach().clone()
+        occupancy = visited[env_id].to("cpu").long()
+        frontier = frontier_mask_from_visited(visited)[env_id].detach().clone().to("cpu").bool()
+        mapped_free_cells = float(occupancy.sum().item())
     trajectory = env._trajectory[env_id].detach().clone().to("cpu").bool() if hasattr(env, "_trajectory") else None
     if hasattr(env, "_safe_root_pos_w"):
         centers = env._world_to_grid(env._safe_root_pos_w()[:, :2])
@@ -260,7 +267,7 @@ def _capture_isaac_map(env, env_id: int) -> ExplorationMapSnapshot:
         frontier_mask=frontier,
         trajectory_mask=trajectory,
         robot_xy=robot_xy,
-        mapped_free_cells=float(occupancy.sum().item()),
+        mapped_free_cells=mapped_free_cells,
         frontier_count=float(frontier.sum().item()),
         env_id=int(env_id),
         backend="isaac",

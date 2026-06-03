@@ -45,8 +45,22 @@ The new task rewards map progress and safety signals:
 - Return-to-start progress after the mission reserve time begins.
 
 It intentionally avoids predefined region identifiers, fixed coordinate success
-regions, target area percentages, known free-cell totals, and coordinate-specific
+regions, target area percentages, environment free-cell totals, and coordinate-specific
 entry rewards.
+
+## Map Source
+
+The Isaac task's map state is an agent-side occupancy grid built from the UAV's
+depth camera and pose history. It stores unknown, observed-free, and
+observed-obstacle cells and is the source for frontier masks, map progress, and
+W&B explored-map images.
+
+Do not replace this with Isaac scene occupancy-map generation for training. A
+scene-level occupancy map is useful for inspection, but it is derived from the
+USD environment and would make the exploration task depend on information the
+UAV has not observed. The current mapper is a lightweight 2D depth-ray mapper;
+full ROS2 SLAM can be added as a deployment/evaluation path while preserving the
+agent-side reward contract.
 
 ## Configs
 
@@ -222,3 +236,5 @@ python -m unittest discover -s tests
   `semantic_line` is currently present in the observation contract and debug
   environment, while the Isaac direct env returns zeros until semantic camera
   labels are configured for the tiled camera.
+- The online mapper is 2D and depth-ray based; it does not yet perform dense
+  multi-view fusion, loop closure, or global pose-graph correction.

@@ -56,7 +56,7 @@ class DebugVlmPpoVectorEnv:
         self._generator = torch.Generator(device="cpu").manual_seed(self.cfg.seed)
         shape = (self.num_envs, self.cfg.grid_size, self.cfg.grid_size)
         self._true_map = torch.ones(shape, dtype=torch.long, device=self.device)
-        self._known_map = torch.zeros(shape, dtype=torch.long, device=self.device)
+        self._agent_map = torch.zeros(shape, dtype=torch.long, device=self.device)
         self._trajectory = torch.zeros(shape, dtype=torch.bool, device=self.device)
         self._pose = torch.zeros(self.num_envs, 2, dtype=torch.float32, device=self.device)
         self._yaw = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
@@ -82,7 +82,7 @@ class DebugVlmPpoVectorEnv:
         for env_id in ids.tolist():
             self._true_map[env_id] = self._build_map(env_id)
         center = self.cfg.grid_size // 2
-        self._known_map[ids] = 0
+        self._agent_map[ids] = 0
         self._trajectory[ids] = False
         self._pose[ids] = torch.tensor([center, center], dtype=torch.float32, device=self.device)
         self._home_pose[ids] = self._pose[ids]
@@ -96,9 +96,9 @@ class DebugVlmPpoVectorEnv:
         self._prev_actions[ids] = 0.0
         self._curiosity.reset(ids)
         self._reveal(ids)
-        self._mapped_free_cells[ids] = (self._known_map[ids] == 1).flatten(start_dim=1).sum(dim=1).float()
+        self._mapped_free_cells[ids] = (self._agent_map[ids] == 1).flatten(start_dim=1).sum(dim=1).float()
         self._prev_mapped_free_cells[ids] = self._mapped_free_cells[ids]
-        self._curiosity.prime(self._known_map, ids)
+        self._curiosity.prime(self._agent_map, ids)
         return self._get_obs()
 
     def step(self, actions):
@@ -107,11 +107,11 @@ class DebugVlmPpoVectorEnv:
         prev_mapped_free_cells = self._mapped_free_cells.clone()
         collision = self._move(actions)
         self._reveal()
-        occupancy_for_reward = self._known_map.clone()
+        occupancy_for_reward = self._agent_map.clone()
         new_cell_reward, new_counts = self._curiosity.update(occupancy_for_reward)
         frontier = self._frontier_mask()
         frontier_count = frontier.flatten(start_dim=1).sum(dim=1).float()
-        self._mapped_free_cells = (self._known_map == 1).flatten(start_dim=1).sum(dim=1).float()
+        self._mapped_free_cells = (self._agent_map == 1).flatten(start_dim=1).sum(dim=1).float()
         mapped_cell_delta = (self._mapped_free_cells - prev_mapped_free_cells).clamp_min(0.0)
         frontier_closed_now = (frontier_count <= 0) & (self._mapped_free_cells >= self.cfg.min_mapped_cells_for_completion)
         self._frontier_closed_counter = torch.where(
@@ -215,12 +215,12 @@ class DebugVlmPpoVectorEnv:
             col = int(centers[env_id, 1].item())
             row0, row1 = max(0, row - radius), min(self.cfg.grid_size, row + radius + 1)
             col0, col1 = max(0, col - radius), min(self.cfg.grid_size, col + radius + 1)
-            self._known_map[env_id, row0:row1, col0:col1] = self._true_map[env_id, row0:row1, col0:col1]
+            self._agent_map[env_id, row0:row1, col0:col1] = self._true_map[env_id, row0:row1, col0:col1]
 
     def _get_obs(self):
         centers = self._centers()
         frontier = self._frontier_mask()
-        map_crop = crop_grid(self._known_map, centers, self.cfg.crop_size)
+        map_crop = crop_grid(self._agent_map, centers, self.cfg.crop_size)
         frontier_crop = crop_grid(frontier.long(), centers, self.cfg.crop_size)
         trajectory_crop = crop_grid(self._trajectory.long(), centers, self.cfg.crop_size)
         camera_rgb = self._renderer.render(
@@ -240,9 +240,9 @@ class DebugVlmPpoVectorEnv:
         }
 
     def _frontier_mask(self):
-        frontier = torch.zeros_like(self._known_map, dtype=torch.bool)
-        free = self._known_map == 1
-        unknown = self._known_map == 0
+        frontier = torch.zeros_like(self._agent_map, dtype=torch.bool)
+        free = self._agent_map == 1
+        unknown = self._agent_map == 0
         for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
             frontier |= free & torch.roll(unknown, shifts=(dr, dc), dims=(1, 2))
         frontier[:, 0, :] = False
@@ -292,7 +292,7 @@ class DebugVlmPpoVectorEnv:
                 features[env_id, 4] = self._stuck_counter[env_id].float() / max(1, self.cfg.stuck_steps)
                 continue
             frontier_list = frontier[env_id].cpu().tolist()
-            planning_map = self._known_map[env_id].clone()
+            planning_map = self._agent_map[env_id].clone()
             planning_map[planning_map == 0] = 2
             path, goal, cost = grid_planning.astar_to_any_goal(
                 tuple(centers[env_id].cpu().tolist()),

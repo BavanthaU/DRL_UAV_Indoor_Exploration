@@ -63,6 +63,45 @@ class UnknownEnvironmentContractTest(unittest.TestCase):
         depth_line = depth_line_from_camera(depth, width=9, max_depth_m=6.0)
         self.assertLess(depth_line[0, 4].item(), 0.08)
 
+    def test_frontier_uses_unknown_not_occupied_neighbors(self):
+        from exploration_stack.tasks.vlm_ppo_exploration.observations import frontier_mask_from_occupancy
+
+        occupancy = torch.zeros(1, 7, 7, dtype=torch.long)
+        occupancy[0, 3, 3] = 1
+        occupancy[0, 3, 4] = 2
+        frontier = frontier_mask_from_occupancy(occupancy)
+        self.assertTrue(frontier[0, 3, 3])
+        occupancy[0, 2, 3] = 2
+        occupancy[0, 4, 3] = 2
+        occupancy[0, 3, 2] = 2
+        frontier = frontier_mask_from_occupancy(occupancy)
+        self.assertFalse(frontier[0, 3, 3])
+
+    def test_depth_mapper_marks_free_ray_and_occupied_endpoint(self):
+        from exploration_stack.tasks.vlm_ppo_exploration.mapping import integrate_depth_line_occupancy
+
+        occupancy = torch.zeros(1, 16, 16, dtype=torch.long)
+        trajectory = torch.zeros(1, 16, 16, dtype=torch.bool)
+        centers = torch.tensor([[8, 8]])
+        yaw = torch.tensor([0.0])
+        distances = torch.tensor([[1.0]])
+        hit_mask = torch.tensor([[True]])
+        integrate_depth_line_occupancy(
+            occupancy,
+            trajectory,
+            centers,
+            yaw,
+            distances,
+            hit_mask,
+            resolution_m=0.25,
+            max_range_m=2.0,
+            horizontal_fov_rad=0.0,
+        )
+        self.assertTrue(trajectory[0, 8, 8])
+        self.assertEqual(occupancy[0, 8, 8].item(), 1)
+        self.assertEqual(occupancy[0, 11, 8].item(), 1)
+        self.assertEqual(occupancy[0, 12, 8].item(), 2)
+
     def test_reward_terms_use_frontier_closure_not_area_threshold(self):
         from exploration_stack.tasks.vlm_ppo_exploration.reward_terms import RewardWeights, compute_extrinsic_reward
 
@@ -123,6 +162,44 @@ class UnknownEnvironmentContractTest(unittest.TestCase):
 
         done = altitude_out_of_bounds(torch.tensor([1.2, float("nan"), float("inf")]), 0.8, 1.8)
         self.assertEqual(done.tolist(), [False, True, True])
+
+    def test_sustained_altitude_violation_filters_single_step_dips(self):
+        from exploration_stack.tasks.vlm_ppo_exploration.terminations import sustained_altitude_out_of_bounds
+
+        low_counter = torch.zeros(3, dtype=torch.long)
+        high_counter = torch.zeros(3, dtype=torch.long)
+        altitude = torch.tensor([1.2, 0.5, 2.3])
+        done, low, high, low_counter, high_counter = sustained_altitude_out_of_bounds(
+            altitude,
+            0.6,
+            2.2,
+            low_counter,
+            high_counter,
+            required_steps=2,
+        )
+        self.assertEqual(done.tolist(), [False, False, False])
+        self.assertEqual(low.tolist(), [False, True, False])
+        self.assertEqual(high.tolist(), [False, False, True])
+        done, _, _, low_counter, high_counter = sustained_altitude_out_of_bounds(
+            altitude,
+            0.6,
+            2.2,
+            low_counter,
+            high_counter,
+            required_steps=2,
+        )
+        self.assertEqual(done.tolist(), [False, True, True])
+        done, _, _, low_counter, high_counter = sustained_altitude_out_of_bounds(
+            torch.tensor([float("nan"), 1.2, 1.2]),
+            0.6,
+            2.2,
+            low_counter,
+            high_counter,
+            required_steps=2,
+        )
+        self.assertEqual(done.tolist(), [True, False, False])
+        self.assertEqual(low_counter.tolist(), [0, 0, 0])
+        self.assertEqual(high_counter.tolist(), [0, 0, 0])
 
 
 if __name__ == "__main__":
