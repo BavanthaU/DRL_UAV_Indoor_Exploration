@@ -117,7 +117,7 @@ class HierarchicalPPOTrainerAdapter(TrainerAdapter):
                     info["log_prob"] = evaluated.log_prob
                     info["value"] = evaluated.value
             next_obs, reward, done, info_env = env.step(action.detach())
-            reward = self._as_tensor(reward).detach()
+            reward = torch.nan_to_num(self._as_tensor(reward).float(), nan=0.0, posinf=0.0, neginf=0.0).detach()
             reward_to_store = self.reward_normalizer(reward) if self.reward_normalizer is not None else reward
             obs_buf.append({key: value.detach() for key, value in obs.items()})
             actions.append(action.detach())
@@ -128,7 +128,8 @@ class HierarchicalPPOTrainerAdapter(TrainerAdapter):
             rewards.append(reward_to_store.detach())
             dones.append(self._as_tensor(done).float().detach())
             for key, value in info_env.get("reward_terms", {}).items():
-                reward_term_sums[key] = reward_term_sums.get(key, 0.0) + float(self._as_tensor(value).mean().cpu())
+                value_tensor = torch.nan_to_num(self._as_tensor(value).float(), nan=0.0, posinf=0.0, neginf=0.0)
+                reward_term_sums[key] = reward_term_sums.get(key, 0.0) + float(value_tensor.mean().cpu())
             safety_interventions += float(interventions.float().sum().detach().cpu())
             if "safety_interventions" in info_env:
                 safety_interventions += float(self._as_tensor(info_env["safety_interventions"]).sum().cpu())
@@ -177,20 +178,21 @@ class HierarchicalPPOTrainerAdapter(TrainerAdapter):
         return output
 
     def _compute_gae(self, rollout):
-        rewards = rollout["rewards"]
+        rewards = torch.nan_to_num(rollout["rewards"], nan=0.0, posinf=0.0, neginf=0.0)
         dones = rollout["dones"]
-        values = rollout["values"]
+        values = torch.nan_to_num(rollout["values"], nan=0.0, posinf=0.0, neginf=0.0)
         advantages = torch.zeros_like(rewards)
         last_advantage = torch.zeros(rewards.shape[1], device=self.device)
-        next_value = rollout["next_value"]
+        next_value = torch.nan_to_num(rollout["next_value"], nan=0.0, posinf=0.0, neginf=0.0)
         for step in reversed(range(rewards.shape[0])):
             mask = 1.0 - dones[step]
             delta = rewards[step] + self.cfg.gamma * next_value * mask - values[step]
             last_advantage = delta + self.cfg.gamma * self.cfg.gae_lambda * mask * last_advantage
             advantages[step] = last_advantage
             next_value = values[step]
-        returns = advantages + values
+        returns = torch.nan_to_num(advantages + values, nan=0.0, posinf=0.0, neginf=0.0)
         advantages = (advantages - advantages.mean()) / advantages.std().clamp_min(1e-8)
+        advantages = torch.nan_to_num(advantages, nan=0.0, posinf=0.0, neginf=0.0)
         return advantages, returns
 
     def _update(self, rollout):
@@ -254,7 +256,9 @@ class HierarchicalPPOTrainerAdapter(TrainerAdapter):
     def _rollout_metrics(self, rollout):
         metrics: dict[str, float] = {
             "safety/interventions": float(rollout.get("safety_interventions", 0.0)),
-            "rollout/mean_reward": float(rollout["rewards"].mean().detach().cpu()),
+            "rollout/mean_reward": float(
+                torch.nan_to_num(rollout["rewards"], nan=0.0, posinf=0.0, neginf=0.0).mean().detach().cpu()
+            ),
         }
         counts = torch.bincount(rollout["options"].flatten(), minlength=len(OPTION_NAMES)).float()
         total = counts.sum().clamp_min(1.0)

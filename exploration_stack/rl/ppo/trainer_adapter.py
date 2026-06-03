@@ -83,7 +83,7 @@ class TorchPPOTrainerAdapter(TrainerAdapter):
             with torch.no_grad():
                 action, info = self.model.act(obs)
             next_obs, reward, done, info_env = env.step(action.detach())
-            reward = self._as_tensor(reward).detach()
+            reward = torch.nan_to_num(self._as_tensor(reward).float(), nan=0.0, posinf=0.0, neginf=0.0).detach()
             rnd_metrics = {}
             if self.rnd is not None and self.cfg.rnd_beta > 0.0:
                 rnd_input = self._build_rnd_input(obs, info["aux"])
@@ -103,7 +103,8 @@ class TorchPPOTrainerAdapter(TrainerAdapter):
             rewards.append(reward_to_store.detach())
             dones.append(self._as_tensor(done).float().detach())
             for key, value in info_env.get("reward_terms", {}).items():
-                reward_term_sums[key] = reward_term_sums.get(key, 0.0) + float(self._as_tensor(value).mean().cpu())
+                value_tensor = torch.nan_to_num(self._as_tensor(value).float(), nan=0.0, posinf=0.0, neginf=0.0)
+                reward_term_sums[key] = reward_term_sums.get(key, 0.0) + float(value_tensor.mean().cpu())
             for key, value in rnd_metrics.items():
                 reward_term_sums[key] = reward_term_sums.get(key, 0.0) + value
             obs = self._to_device(next_obs)
@@ -124,20 +125,21 @@ class TorchPPOTrainerAdapter(TrainerAdapter):
         return rollout
 
     def _compute_gae(self, rollout):
-        rewards = rollout["rewards"]
+        rewards = torch.nan_to_num(rollout["rewards"], nan=0.0, posinf=0.0, neginf=0.0)
         dones = rollout["dones"]
-        values = rollout["values"]
+        values = torch.nan_to_num(rollout["values"], nan=0.0, posinf=0.0, neginf=0.0)
         advantages = torch.zeros_like(rewards)
         last_advantage = torch.zeros(rewards.shape[1], device=self.device)
-        next_value = rollout["next_value"]
+        next_value = torch.nan_to_num(rollout["next_value"], nan=0.0, posinf=0.0, neginf=0.0)
         for step in reversed(range(rewards.shape[0])):
             mask = 1.0 - dones[step]
             delta = rewards[step] + self.cfg.gamma * next_value * mask - values[step]
             last_advantage = delta + self.cfg.gamma * self.cfg.gae_lambda * mask * last_advantage
             advantages[step] = last_advantage
             next_value = values[step]
-        returns = advantages + values
+        returns = torch.nan_to_num(advantages + values, nan=0.0, posinf=0.0, neginf=0.0)
         advantages = (advantages - advantages.mean()) / (advantages.std().clamp_min(1e-8))
+        advantages = torch.nan_to_num(advantages, nan=0.0, posinf=0.0, neginf=0.0)
         return advantages, returns
 
     def _update(self, rollout):

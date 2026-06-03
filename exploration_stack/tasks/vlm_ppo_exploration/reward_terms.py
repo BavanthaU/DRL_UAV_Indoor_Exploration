@@ -26,6 +26,10 @@ class RewardWeights:
     beta_semantic_novelty: float = 0.02
 
 
+def _finite_tensor(value, *, nan: float = 0.0, posinf: float = 0.0, neginf: float = 0.0):
+    return torch.nan_to_num(value.float(), nan=nan, posinf=posinf, neginf=neginf)
+
+
 def compute_extrinsic_reward(
     *,
     map_progress,
@@ -45,10 +49,19 @@ def compute_extrinsic_reward(
     weights: RewardWeights | None = None,
 ):
     weights = weights or RewardWeights()
+    map_progress = _finite_tensor(map_progress)
     if frontier_distance_delta is None:
         frontier_distance_delta = torch.zeros_like(map_progress)
+    else:
+        frontier_distance_delta = _finite_tensor(frontier_distance_delta)
     if return_home_progress is None:
         return_home_progress = torch.zeros_like(map_progress)
+    else:
+        return_home_progress = _finite_tensor(return_home_progress)
+    esdf_clearance = _finite_tensor(esdf_clearance, nan=float(safety_radius), posinf=float(safety_radius))
+    action = _finite_tensor(action)
+    prev_action = _finite_tensor(prev_action)
+    altitude = _finite_tensor(altitude, nan=float(target_altitude), posinf=float(target_altitude), neginf=float(target_altitude))
     near_obstacle = (float(safety_radius) - esdf_clearance).clamp_min(0.0)
     smoothness = torch.sum(torch.square(action - prev_action), dim=-1)
     altitude_error = torch.abs(altitude - target_altitude)
@@ -71,6 +84,10 @@ def compute_extrinsic_reward(
 
 def combine_rewards(extrinsic, new_cell_reward, rnd_reward, semantic_novelty, weights: RewardWeights | None = None):
     weights = weights or RewardWeights()
+    extrinsic = _finite_tensor(extrinsic)
+    new_cell_reward = _finite_tensor(new_cell_reward)
+    rnd_reward = _finite_tensor(rnd_reward)
+    semantic_novelty = _finite_tensor(semantic_novelty)
     terms = {
         "extrinsic": extrinsic,
         "new_cell_count": weights.beta_count * new_cell_reward,

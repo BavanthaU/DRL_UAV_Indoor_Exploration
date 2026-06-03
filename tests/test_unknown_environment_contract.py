@@ -51,6 +51,43 @@ class UnknownEnvironmentContractTest(unittest.TestCase):
         self.assertNotIn("success", terms)
         self.assertNotIn("global_coverage_progress", terms)
 
+    def test_reward_terms_sanitize_nonfinite_pose_inputs(self):
+        from exploration_stack.tasks.vlm_ppo_exploration.reward_terms import RewardWeights, combine_rewards, compute_extrinsic_reward
+
+        extrinsic, extrinsic_terms = compute_extrinsic_reward(
+            map_progress=torch.tensor([1.0, float("nan")]),
+            frontier_closed=torch.tensor([False, False]),
+            collision=torch.tensor([False, True]),
+            esdf_clearance=torch.tensor([1.0, float("nan")]),
+            safety_radius=0.45,
+            dt=1.0,
+            idle_mask=torch.tensor([False, False]),
+            yaw_flip=torch.tensor([False, False]),
+            action=torch.tensor([[0.0, 0.0, 0.0], [float("inf"), 0.0, 0.0]]),
+            prev_action=torch.zeros(2, 3),
+            altitude=torch.tensor([float("nan"), float("inf")]),
+            target_altitude=1.2,
+            return_home_progress=torch.tensor([float("nan"), 1.0]),
+            weights=RewardWeights(),
+        )
+        reward, intrinsic_terms = combine_rewards(
+            extrinsic,
+            torch.tensor([1.0, float("nan")]),
+            torch.zeros(2),
+            torch.zeros(2),
+            RewardWeights(),
+        )
+        self.assertTrue(torch.isfinite(extrinsic).all())
+        self.assertTrue(torch.isfinite(reward).all())
+        for value in {**extrinsic_terms, **intrinsic_terms}.values():
+            self.assertTrue(torch.isfinite(value).all())
+
+    def test_nonfinite_altitude_is_terminal(self):
+        from exploration_stack.tasks.vlm_ppo_exploration.terminations import altitude_out_of_bounds
+
+        done = altitude_out_of_bounds(torch.tensor([1.2, float("nan"), float("inf")]), 0.8, 1.8)
+        self.assertEqual(done.tolist(), [False, True, True])
+
 
 if __name__ == "__main__":
     unittest.main()

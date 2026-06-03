@@ -27,13 +27,14 @@ class RunningMeanStd:
         return self
 
     def update(self, x):
-        x = x.float()
+        x = torch.nan_to_num(x.float(), nan=0.0, posinf=0.0, neginf=0.0)
         batch_mean = x.mean(dim=0)
         batch_var = x.var(dim=0, unbiased=False)
         batch_count = torch.tensor(x.shape[0], device=x.device, dtype=torch.float32)
         self._update_from_moments(batch_mean, batch_var, batch_count)
 
     def normalize(self, x):
+        x = torch.nan_to_num(x.float(), nan=0.0, posinf=0.0, neginf=0.0)
         return (x - self.mean.to(x.device)) / torch.sqrt(self.var.to(x.device).clamp_min(1e-8))
 
     def _update_from_moments(self, batch_mean, batch_var, batch_count):
@@ -58,6 +59,6 @@ class RewardNormalizer:
         return self
 
     def __call__(self, reward):
+        reward = torch.nan_to_num(reward.float(), nan=0.0, posinf=0.0, neginf=0.0)
         self.rms.update(reward.detach().reshape(-1))
         return torch.clamp(self.rms.normalize(reward), -self.clip, self.clip)
-
