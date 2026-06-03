@@ -1,12 +1,13 @@
 # VLM-PPO Curiosity Explorer
 
-This branch adds a standalone PPO exploration path:
+This branch contains a standalone PPO exploration path:
 
 `Isaac-VLM-PPO-UAV-Exploration-v0`
 
-It is separate from the legacy IL/SAC task. The old code is preserved as a
-baseline, but the new training path does not import the IL/SAC configs,
-ConvNeXt encoder, or the old direct 2D pose controller.
+Old baseline source, old checkpoints, old evaluation files, and unrelated
+scaffold code have been removed from this branch. The repository now keeps only
+the code and assets needed to train, evaluate, profile, export, and label the
+VLM-PPO exploration agent.
 
 ## What Changed
 
@@ -14,7 +15,7 @@ ConvNeXt encoder, or the old direct 2D pose controller.
 - Continuous action space: `[v_x_body, v_y_body, yaw_rate]` with altitude hold.
 - Crazyflie articulation with force/torque control through Isaac Lab's direct
   environment path.
-- Indoor office USD asset spawned by default from `isaac45/environments/TrainEnvOffice1.usd`.
+- Indoor office USD asset spawned by default from `assets/environments/TrainEnvOffice1.usd`.
 - VLM frontend under `exploration_stack/vlm_frontend/` with `mobileclip`,
   `siglip`, and `mock` backends.
 - PPO actor-critic and trainer adapters under `exploration_stack/rl/ppo/`.

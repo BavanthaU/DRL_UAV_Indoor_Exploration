@@ -1,7 +1,0 @@
-robot_backend: existing_repo
-control_mode: velocity_body
-use_ground_truth_pose_for_debug: false
-notes: >
-  Wraps the current Isaac/SB3 environment for backward-compatible smoke tests.
-  This keeps the old IL/SAC controller path available while the new stack is
-  validated.

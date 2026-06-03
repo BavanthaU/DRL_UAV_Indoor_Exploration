@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 try:
     import isaaclab.sim as sim_utils
     from isaaclab.envs import DirectRLEnvCfg, ViewerCfg
@@ -9,12 +11,15 @@ try:
     from isaaclab.terrains import TerrainImporterCfg
     from isaaclab.utils import configclass
     from isaaclab_assets import CRAZYFLIE_CFG
-    from isaac45.paths import ENVIRONMENT_DIR
 except ImportError as exc:  # pragma: no cover
     raise RuntimeError(
         "IsaacVlmPpoUavExplorationEnvCfg requires Isaac Lab. Use the debug "
         "mock training config for CPU/unit tests outside Isaac Lab."
     ) from exc
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+ENVIRONMENT_DIR = REPO_ROOT / "assets" / "environments"
 
 
 @configclass

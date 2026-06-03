@@ -8,18 +8,24 @@ conda activate env_isaaclab
 cd /home/bavantha/Autonomous_Drone
 python -m pip install -r requirements.txt
 
-# Four-layer architecture smoke test without Isaac/ROS/VLM
-python scripts/run_four_layer_smoke_test.py --steps 5
+# Test the VLM-PPO branch
 python -m unittest discover -s tests
+/home/bavantha/miniconda3_aiar/envs/env_isaaclab/bin/python -m unittest discover -s tests
 
-# New VLM-PPO debug smoke training without Isaac
+# Debug VLM-PPO smoke training without Isaac
 python scripts/train_vlm_ppo_explorer.py \
   --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
   --max_iterations 1 \
   --num_envs 2 \
   --wandb_mode disabled
 
-# New VLM-PPO Isaac Lab training with MobileCLIP frontend
+# Profile debug path
+python scripts/profile_vlm_ppo_explorer.py \
+  --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
+  --num_envs 2 \
+  --wandb_mode disabled
+
+# Isaac Lab VLM-PPO training with MobileCLIP frontend
 cd /home/bavantha/IsaacLab
 ./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/train_vlm_ppo_explorer.py \
   --task Isaac-VLM-PPO-UAV-Exploration-v0 \
@@ -30,11 +36,3 @@ cd /home/bavantha/IsaacLab
   --wandb_project vlm-ppo-uav-exploration
 
 cd /home/bavantha/Autonomous_Drone
-
-# Start SAC training without IL
-CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/train_exploration.py \
-  --enable_cameras \
-  --num_envs 10 \
-  --headless \
-  --task Drone_SAC_no_IL_MapProgress_V1 \
-  --wandb_mode disabled

@@ -1,5 +1,6 @@
-"""Four-layer exploration architecture for UAV indoor exploration.
+"""VLM-PPO exploration training package for UAV indoor exploration.
 
-This package is intentionally independent from Isaac Sim, ROS 2, and VLM
-dependencies at import time. Heavy backends are loaded only by their adapters.
+The package keeps import-time dependencies light where possible. Isaac Lab,
+VLM backends, and teacher models are loaded only by the task/script that needs
+them.
 """
