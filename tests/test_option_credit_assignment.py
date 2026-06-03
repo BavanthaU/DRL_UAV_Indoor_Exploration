@@ -15,7 +15,7 @@ class OptionCreditAssignmentTest(unittest.TestCase):
 
         credit = OptionCreditAccumulator(2, OptionCreditConfig(collision_penalty=2.0), device="cpu")
         reward = credit.update(
-            coverage_gain=torch.tensor([0.2, 0.1]),
+            map_progress=torch.tensor([0.2, 0.1]),
             new_cell_reward=torch.tensor([1.0, 0.0]),
             collision=torch.tensor([False, True]),
             stuck=torch.tensor([False, False]),

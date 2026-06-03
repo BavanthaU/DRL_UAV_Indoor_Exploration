@@ -34,10 +34,10 @@ def compute_auxiliary_losses(predictions: dict, labels: dict | None) -> Auxiliar
         loss = F.binary_cross_entropy(predictions["dead_end_likelihood"].clamp(1e-5, 1 - 1e-5), labels["dead_end"].float())
         losses.append(loss)
         terms["dead_end_bce"] = float(loss.detach().cpu())
-    if "coverage_delta" in labels and "coverage_delta_prediction" in predictions:
-        loss = F.mse_loss(predictions["coverage_delta_prediction"], labels["coverage_delta"].float())
+    if "map_progress_delta" in labels and "map_progress_prediction" in predictions:
+        loss = F.mse_loss(predictions["map_progress_prediction"], labels["map_progress_delta"].float())
         losses.append(loss)
-        terms["coverage_delta_mse"] = float(loss.detach().cpu())
+        terms["map_progress_mse"] = float(loss.detach().cpu())
     if "option_label" in labels and "option_logits" in predictions:
         loss = F.cross_entropy(predictions["option_logits"], labels["option_label"].long())
         losses.append(loss)

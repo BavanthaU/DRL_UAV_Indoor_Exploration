@@ -75,7 +75,7 @@ class VLMPolicyEncoder(nn.Module if nn is not None else object):
             raise ValueError(f"Unsupported memory_type '{cfg.memory_type}'")
         self.actor_proj = nn.Sequential(nn.Linear(cfg.latent_dim, cfg.latent_dim), nn.SiLU())
         self.critic_proj = nn.Sequential(nn.Linear(cfg.latent_dim, cfg.latent_dim), nn.SiLU())
-        self.coverage_head = nn.Linear(cfg.latent_dim, 1)
+        self.map_progress_head = nn.Linear(cfg.latent_dim, 1)
         self.loop_head = nn.Linear(cfg.latent_dim, 1)
 
     def forward(self, obs: dict[str, "torch.Tensor"], memory_state=None) -> VLMPolicyEncoderOutput:
@@ -127,7 +127,7 @@ class VLMPolicyEncoder(nn.Module if nn is not None else object):
             "frontier_value": affordance.frontier_value,
             "frontier_utility": affordance.frontier_value,
             "revisit_likelihood": affordance.revisit_likelihood,
-            "coverage_delta_prediction": self.coverage_head(latent).squeeze(-1),
+            "map_progress_prediction": self.map_progress_head(latent).squeeze(-1),
             "loop_probability": torch.sigmoid(self.loop_head(latent).squeeze(-1)),
             "uncertainty": prompt_uncertainty(similarities[0]),
         }

@@ -30,6 +30,11 @@ main hierarchical PPO trainer.
 - Planner dropout defaults for the main run:
   `planner_dropout_prob=0.2`, `astar_feature_dropout_prob=0.2`,
   `frontier_candidate_dropout_prob=0.1`.
+- Unknown-environment completion: the reward/termination path does not receive
+  target area percentages or known free-cell totals; it uses local map progress,
+  frontier/opening closure, and return-to-start timing.
+- Mission reserve behavior: the main configs use a 10 minute episode and switch
+  to return-start behavior after 480 seconds.
 - Offline Qwen2.5-VL labeler for auxiliary labels only. Qwen is not called
   during PPO rollout.
 - W&B logging for configs, metrics, checkpoints, eval/profile artifacts, and

@@ -142,8 +142,11 @@ def make_debug_env(config: dict[str, Any], args: argparse.Namespace):
         image_size=int(vlm_cfg.get("image_size", 64)),
         max_steps=int(env_cfg.get("max_steps", 64)),
         sensor_radius_cells=int(env_cfg.get("sensor_radius_cells", 3)),
-        success_threshold=float(env_cfg.get("success_threshold", 0.60)),
         stuck_steps=int(env_cfg.get("stuck_steps", 24)),
+        frontier_closed_steps=int(env_cfg.get("frontier_closed_steps", 6)),
+        min_mapped_cells_for_completion=int(env_cfg.get("min_mapped_cells_for_completion", 16)),
+        return_home_fraction=float(env_cfg.get("return_home_fraction", 0.8)),
+        home_reached_radius_cells=float(env_cfg.get("home_reached_radius_cells", 2.0)),
         device=device,
         seed=int(args.seed if args.seed is not None else config.get("seed", 7)),
     )

@@ -30,13 +30,13 @@ class OptionCreditAccumulator:
         self.return_sum[ids] = 0.0
         self.duration[ids] = 0
 
-    def update(self, *, coverage_gain, new_cell_reward, collision, stuck, revisit_ratio=None, path_inefficiency=None):
+    def update(self, *, map_progress, new_cell_reward, collision, stuck, revisit_ratio=None, path_inefficiency=None):
         if revisit_ratio is None:
-            revisit_ratio = torch.zeros_like(coverage_gain)
+            revisit_ratio = torch.zeros_like(map_progress)
         if path_inefficiency is None:
-            path_inefficiency = torch.zeros_like(coverage_gain)
+            path_inefficiency = torch.zeros_like(map_progress)
         reward = (
-            coverage_gain
+            map_progress
             + new_cell_reward
             - self.cfg.collision_penalty * collision.float()
             - self.cfg.stuck_penalty * stuck.float()

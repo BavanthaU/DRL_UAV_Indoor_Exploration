@@ -31,7 +31,7 @@ def main() -> None:
     obs = trainer._to_device(env.reset())
     episode_returns = torch.zeros(env.num_envs, device=trainer.device)
     finished_returns: list[float] = []
-    finished_coverages: list[float] = []
+    finished_mapped_cells: list[float] = []
     max_steps = args.steps or int(config.get("environment", {}).get("max_steps", 600)) * args.num_eval_episodes
     for _ in range(max_steps):
         with torch.no_grad():
@@ -40,11 +40,11 @@ def main() -> None:
         reward = trainer._as_tensor(reward)
         done = trainer._as_tensor(done).bool()
         episode_returns += reward
-        coverage = info.get("reward_terms", {}).get("coverage")
-        coverage_tensor = trainer._as_tensor(coverage) if coverage is not None else torch.zeros(env.num_envs, device=trainer.device)
+        mapped_cells = info.get("reward_terms", {}).get("mapped_free_cells")
+        mapped_cells_tensor = trainer._as_tensor(mapped_cells) if mapped_cells is not None else torch.zeros(env.num_envs, device=trainer.device)
         for env_id in torch.nonzero(done, as_tuple=False).flatten().tolist():
             finished_returns.append(float(episode_returns[env_id].detach().cpu()))
-            finished_coverages.append(float(coverage_tensor[env_id].detach().cpu()))
+            finished_mapped_cells.append(float(mapped_cells_tensor[env_id].detach().cpu()))
             episode_returns[env_id] = 0.0
             if len(finished_returns) >= args.num_eval_episodes:
                 break
@@ -54,7 +54,7 @@ def main() -> None:
     metrics = {
         "episodes": len(finished_returns),
         "mean_return": sum(finished_returns) / max(1, len(finished_returns)),
-        "mean_coverage": sum(finished_coverages) / max(1, len(finished_coverages)),
+        "mean_mapped_free_cells": sum(finished_mapped_cells) / max(1, len(finished_mapped_cells)),
     }
     output_dir = Path(args.output_dir or build_log_dir(config, args))
     output_dir.mkdir(parents=True, exist_ok=True)

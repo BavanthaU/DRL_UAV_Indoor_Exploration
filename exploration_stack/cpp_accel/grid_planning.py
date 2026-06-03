@@ -10,10 +10,8 @@ try:
         astar_grid as _cpp_astar_grid,
         astar_to_any_goal as _cpp_astar_to_any_goal,
         cluster_frontiers as _cpp_cluster_frontiers,
-        compute_coverage_ratio as _cpp_compute_coverage_ratio,
         connected_components as _cpp_connected_components,
         extract_frontiers as _cpp_extract_frontiers,
-        update_coverage_bitset as _cpp_update_coverage_bitset,
     )
 
     CPP_ACCEL_ACTIVE = True
@@ -22,10 +20,8 @@ except ImportError:
     _cpp_astar_grid = None
     _cpp_astar_to_any_goal = None
     _cpp_cluster_frontiers = None
-    _cpp_compute_coverage_ratio = None
     _cpp_connected_components = None
     _cpp_extract_frontiers = None
-    _cpp_update_coverage_bitset = None
 
 
 def astar_grid(start, goal, occupancy, cost_map=None, allow_diagonal=False):
@@ -89,9 +85,7 @@ def cluster_frontiers(frontier_mask, min_cluster_size=5):
     return clusters
 
 
-def update_coverage_bitset(visited_bitset, newly_observed_mask):
-    if CPP_ACCEL_ACTIVE:
-        return _cpp_update_coverage_bitset(visited_bitset, newly_observed_mask)
+def update_observed_bitset(visited_bitset, newly_observed_mask):
     count = 0
     for row in range(len(visited_bitset)):
         for col in range(len(visited_bitset[0])):
@@ -101,14 +95,12 @@ def update_coverage_bitset(visited_bitset, newly_observed_mask):
     return count
 
 
-def compute_coverage_ratio(visited_bitset, valid_free_mask):
-    if CPP_ACCEL_ACTIVE:
-        return _cpp_compute_coverage_ratio(visited_bitset, valid_free_mask)
+def compute_observed_fraction(visited_bitset, candidate_mask):
     valid = 0
     visited = 0
-    for row in range(len(valid_free_mask)):
-        for col in range(len(valid_free_mask[0])):
-            if valid_free_mask[row][col]:
+    for row in range(len(candidate_mask)):
+        for col in range(len(candidate_mask[0])):
+            if candidate_mask[row][col]:
                 valid += 1
                 visited += bool(visited_bitset[row][col])
     return float(visited / valid) if valid else 0.0

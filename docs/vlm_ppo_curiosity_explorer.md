@@ -26,7 +26,7 @@ VLM-PPO exploration agent.
 - PPO actor-critic and trainer adapters under `exploration_stack/rl/ppo/`.
 - Curiosity rewards: new-cell count, optional policy-side RND, and semantic
   novelty scaffolding.
-- C++/Python grid-planning utilities for A*, frontier extraction, coverage, and
+- C++/Python grid-planning utilities for A*, frontier extraction, observed-area updates, and
   connected components.
 - Offline Qwen2.5-VL teacher labeler for auxiliary supervision only. It is not
   called during PPO rollout.
@@ -36,14 +36,17 @@ VLM-PPO exploration agent.
 The new task rewards map progress and safety signals:
 
 - New unique free cells discovered.
-- Coverage-ratio progress.
+- Local map progress from newly observed free space.
 - Distance/progress features to selected frontiers.
 - Collision, near-obstacle, idle, oscillation, action-smoothness, and altitude
   penalties.
-- Success when coverage reaches the configured threshold.
+- Completion when the local map has no remaining frontier/opening candidates for
+  the configured patience window.
+- Return-to-start progress after the mission reserve time begins.
 
 It intentionally avoids predefined region identifiers, fixed coordinate success
-regions, and coordinate-specific doorway rewards.
+regions, target area percentages, known free-cell totals, and coordinate-specific
+entry rewards.
 
 ## Configs
 

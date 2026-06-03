@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 
 
 DEFAULT_EXPLORATION_PROMPTS = [
-    "a doorway leading to another room",
+    "a doorway leading to another area",
     "a corridor or hallway continuation",
     "an open navigable indoor space",
     "a wall or obstacle blocking the drone",
@@ -13,7 +13,7 @@ DEFAULT_EXPLORATION_PROMPTS = [
     "a place likely to reveal new area",
     "a risky area close to collision",
     "a repeated or already explored area",
-    "a room exit",
+    "an exit from the current area",
     "a dead end",
     "a safe direction for a small drone",
     "an area that should be explored next",
@@ -26,7 +26,7 @@ class PromptBank:
 
     @property
     def doorway_index(self) -> int:
-        return self.prompts.index("a doorway leading to another room")
+        return self.prompts.index("a doorway leading to another area")
 
     @property
     def corridor_index(self) -> int:

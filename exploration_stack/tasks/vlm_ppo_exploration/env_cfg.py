@@ -44,8 +44,11 @@ class VlmPpoMapCfg:
     crop_size: int = 32
     resolution_m: float = 0.25
     sensor_radius_cells: int = 3
-    success_threshold: float = 0.85
     stuck_steps: int = 80
+    frontier_closed_steps: int = 12
+    min_mapped_cells_for_completion: int = 64
+    return_home_after_s: float = 480.0
+    home_reached_radius_m: float = 0.75
 
 
 @configclass
@@ -53,8 +56,9 @@ class VlmPpoRewardCfg:
     beta_count: float = 1.0
     beta_rnd: float = 0.05
     beta_semantic_novelty: float = 0.02
-    w_success: float = 10.0
-    w_global_coverage_progress: float = 2.0
+    w_frontier_closure: float = 5.0
+    w_map_progress: float = 1.0
+    w_return_home_progress: float = 1.0
     w_collision: float = 10.0
     w_near_obstacle: float = 1.0
     w_time: float = 0.002

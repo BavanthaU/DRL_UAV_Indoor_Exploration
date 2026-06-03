@@ -29,8 +29,11 @@ class DebugVlmPpoEnvConfig:
     max_vx_cells: float = 1.0
     max_vy_cells: float = 0.8
     max_yaw_rate: float = 0.35
-    success_threshold: float = 0.60
     stuck_steps: int = 24
+    frontier_closed_steps: int = 6
+    min_mapped_cells_for_completion: int = 16
+    return_home_fraction: float = 0.8
+    home_reached_radius_cells: float = 2.0
     device: str = "cpu"
     seed: int = 7
 
@@ -59,15 +62,18 @@ class DebugVlmPpoVectorEnv:
         self._yaw = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self._steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._stuck_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
-        self._prev_coverage = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._mapped_free_cells = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._prev_mapped_free_cells = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._frontier_closed_counter = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self._prev_actions = torch.zeros(self.num_envs, self.action_dim, dtype=torch.float32, device=self.device)
-        self._coverage = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self._home_pose = torch.zeros(self.num_envs, 2, dtype=torch.float32, device=self.device)
+        self._prev_home_distance = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self._curiosity = NewCellCountCuriosity(
             self.num_envs,
             (self.cfg.grid_size, self.cfg.grid_size),
             device=self.device,
         )
-        self._weights = RewardWeights(success_threshold=self.cfg.success_threshold)
+        self._weights = RewardWeights()
         self._renderer = MapRenderer(MapRenderConfig(image_size=self.cfg.image_size))
         self.reset()
 
@@ -79,11 +85,14 @@ class DebugVlmPpoVectorEnv:
         self._known_map[ids] = 0
         self._trajectory[ids] = False
         self._pose[ids] = torch.tensor([center, center], dtype=torch.float32, device=self.device)
+        self._home_pose[ids] = self._pose[ids]
         self._yaw[ids] = 0.0
         self._steps[ids] = 0
         self._stuck_counter[ids] = 0
-        self._prev_coverage[ids] = 0.0
-        self._coverage[ids] = 0.0
+        self._mapped_free_cells[ids] = 0.0
+        self._prev_mapped_free_cells[ids] = 0.0
+        self._frontier_closed_counter[ids] = 0
+        self._prev_home_distance[ids] = 0.0
         self._prev_actions[ids] = 0.0
         self._curiosity.reset(ids)
         self._reveal(ids)
@@ -92,30 +101,45 @@ class DebugVlmPpoVectorEnv:
     def step(self, actions):
         actions = actions.to(self.device).float().clamp(-1.0, 1.0)
         self._steps += 1
-        prev_coverage = self._coverage.clone()
+        prev_mapped_free_cells = self._mapped_free_cells.clone()
         collision = self._move(actions)
         self._reveal()
         occupancy_for_reward = self._known_map.clone()
         new_cell_reward, new_counts = self._curiosity.update(occupancy_for_reward)
-        self._coverage = self._coverage_ratio()
+        frontier = self._frontier_mask()
+        frontier_count = frontier.flatten(start_dim=1).sum(dim=1).float()
+        self._mapped_free_cells = (self._known_map == 1).flatten(start_dim=1).sum(dim=1).float()
+        mapped_cell_delta = (self._mapped_free_cells - prev_mapped_free_cells).clamp_min(0.0)
+        frontier_closed_now = (frontier_count <= 0) & (self._mapped_free_cells >= self.cfg.min_mapped_cells_for_completion)
+        self._frontier_closed_counter = torch.where(
+            frontier_closed_now,
+            self._frontier_closed_counter + 1,
+            torch.zeros_like(self._frontier_closed_counter),
+        )
+        frontier_complete = self._frontier_closed_counter >= self.cfg.frontier_closed_steps
+        return_home = self._return_home_mask()
+        home_distance = torch.linalg.norm(self._pose - self._home_pose, dim=-1)
+        return_home_progress = (self._prev_home_distance - home_distance).clamp_min(0.0)
+        return_home_progress = return_home_progress * return_home.float() / max(1.0, float(self.cfg.grid_size))
         low_motion = torch.linalg.norm(actions[:, :2], dim=-1) < 0.05
         idle = low_motion & (new_counts <= 0)
         yaw_flip = (torch.sign(actions[:, 2]) != torch.sign(self._prev_actions[:, 2])) & (actions[:, 2].abs() > 0.1)
         yaw_flip &= self._prev_actions[:, 2].abs() > 0.1
         self._stuck_counter = torch.where(new_counts > 0, torch.zeros_like(self._stuck_counter), self._stuck_counter + 1)
         extrinsic, extrinsic_terms = compute_extrinsic_reward(
-            coverage_ratio=self._coverage,
-            prev_coverage_ratio=prev_coverage,
+            map_progress=new_cell_reward.detach(),
+            frontier_closed=frontier_complete,
             collision=collision,
-            esdf_clearance=torch.where(collision, torch.zeros_like(self._coverage), torch.ones_like(self._coverage)),
+            esdf_clearance=torch.where(collision, torch.zeros_like(new_cell_reward), torch.ones_like(new_cell_reward)),
             safety_radius=0.45,
             dt=1.0,
             idle_mask=idle,
             yaw_flip=yaw_flip,
             action=actions,
             prev_action=self._prev_actions,
-            altitude=torch.ones_like(self._coverage) * 1.2,
+            altitude=torch.ones_like(new_cell_reward) * 1.2,
             target_altitude=1.2,
+            return_home_progress=return_home_progress,
             weights=self._weights,
         )
         reward, intrinsic_terms = combine_rewards(
@@ -125,15 +149,22 @@ class DebugVlmPpoVectorEnv:
             torch.zeros_like(new_cell_reward),
             self._weights,
         )
-        done = (
-            collision
-            | (self._coverage >= self.cfg.success_threshold)
-            | (self._steps >= self.cfg.max_steps)
-            | (self._stuck_counter >= self.cfg.stuck_steps)
-        )
-        reward_terms = {**extrinsic_terms, **intrinsic_terms, "new_cells": new_counts, "coverage": self._coverage}
+        returned_home = return_home & (home_distance <= self.cfg.home_reached_radius_cells)
+        done = collision | frontier_complete | returned_home | (self._steps >= self.cfg.max_steps) | (self._stuck_counter >= self.cfg.stuck_steps)
+        reward_terms = {
+            **extrinsic_terms,
+            **intrinsic_terms,
+            "new_cells": new_counts,
+            "mapped_free_cells": self._mapped_free_cells,
+            "mapped_cell_delta": mapped_cell_delta,
+            "frontier_count": frontier_count,
+            "frontier_closed": frontier_complete.float(),
+            "return_home_phase": return_home.float(),
+            "home_distance": home_distance,
+        }
         self._prev_actions = actions.detach().clone()
-        self._prev_coverage = self._coverage.detach().clone()
+        self._prev_mapped_free_cells = self._mapped_free_cells.detach().clone()
+        self._prev_home_distance = home_distance.detach().clone()
         if done.any():
             self.reset(torch.nonzero(done, as_tuple=False).flatten())
         return self._get_obs(), reward.detach(), done.detach(), {"reward_terms": reward_terms}
@@ -246,6 +277,16 @@ class DebugVlmPpoVectorEnv:
         features = torch.zeros(self.num_envs, 5, dtype=torch.float32, device=self.device)
         centers = self._centers()
         for env_id in range(self.num_envs):
+            if self._return_home_mask()[env_id]:
+                delta_grid = self._home_pose[env_id] - self._pose[env_id]
+                distance = torch.linalg.norm(delta_grid)
+                bearing_world = torch.atan2(delta_grid[0], delta_grid[1])
+                bearing_body = self._wrap_angle(bearing_world - self._yaw[env_id])
+                features[env_id, 0] = distance / self.cfg.grid_size
+                features[env_id, 1] = bearing_body / math.pi
+                features[env_id, 3] = 1.0
+                features[env_id, 4] = self._stuck_counter[env_id].float() / max(1, self.cfg.stuck_steps)
+                continue
             frontier_list = frontier[env_id].cpu().tolist()
             planning_map = self._known_map[env_id].clone()
             planning_map[planning_map == 0] = 2
@@ -269,10 +310,8 @@ class DebugVlmPpoVectorEnv:
             features[env_id, 4] = self._stuck_counter[env_id].float() / max(1, self.cfg.stuck_steps)
         return features
 
-    def _coverage_ratio(self):
-        valid_free = self._true_map == 1
-        visited_free = (self._known_map == 1) & valid_free
-        return visited_free.flatten(start_dim=1).sum(dim=1).float() / valid_free.flatten(start_dim=1).sum(dim=1).clamp_min(1).float()
+    def _return_home_mask(self):
+        return self._steps.float() >= float(self.cfg.max_steps) * self.cfg.return_home_fraction
 
     def _centers(self):
         return self._pose.round().long().clamp(0, self.cfg.grid_size - 1)

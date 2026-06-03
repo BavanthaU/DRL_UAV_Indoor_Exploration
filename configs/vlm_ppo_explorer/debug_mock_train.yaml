@@ -10,8 +10,11 @@
     "crop_size": 16,
     "max_steps": 48,
     "sensor_radius_cells": 3,
-    "success_threshold": 0.60,
-    "stuck_steps": 24
+    "stuck_steps": 24,
+    "frontier_closed_steps": 6,
+    "min_mapped_cells_for_completion": 16,
+    "return_home_fraction": 0.8,
+    "home_reached_radius_cells": 2.0
   },
   "vlm": {
     "backend": "mock",

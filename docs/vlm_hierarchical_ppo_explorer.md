@@ -19,13 +19,17 @@ training config does not send planner actions to the environment.
 Rewards are based on actual exploration progress and safety:
 
 - unique newly observed cells,
-- coverage-ratio progress,
-- success when coverage reaches the configured threshold,
+- local map progress from cells observed by the onboard mapping state,
+- completion when the local map has no remaining frontier/opening candidates for
+  the configured patience window,
+- return-to-start progress after the mission reserve time begins,
 - collision, near-obstacle, idle, oscillation, action-smoothness, and altitude penalties,
 - optional intrinsic terms from the existing flat debug/Isaac task.
 
-The task avoids predefined region identifiers, fixed coordinate success regions,
-and coordinate-specific room-entry rewards.
+The task does not receive predefined region identifiers, fixed coordinate success
+regions, target area percentages, known free-cell totals, or coordinate-specific
+entry rewards. For a 10 minute mission, the main configs switch to return-home
+behavior after 480 seconds so the last 2 minutes are reserved for recovery.
 
 ## Main Config
 
@@ -40,6 +44,7 @@ Important defaults:
 - `planner_dropout_prob: 0.2`
 - `astar_feature_dropout_prob: 0.2`
 - `frontier_candidate_dropout_prob: 0.1`
+- `return_home_after_s: 480.0`
 
 ## Baselines and Ablations
 

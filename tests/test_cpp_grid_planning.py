@@ -30,12 +30,12 @@ class GridPlanningFallbackTest(unittest.TestCase):
         )
         self.assertTrue(frontier[1][1])
 
-    def test_coverage_and_components(self):
+    def test_observed_area_and_components(self):
         visited = [[False, False], [True, False]]
         observed = [[True, False], [True, True]]
-        self.assertEqual(grid_planning.update_coverage_bitset(visited, observed), 2)
+        self.assertEqual(grid_planning.update_observed_bitset(visited, observed), 2)
         self.assertEqual(visited, [[True, False], [True, True]])
-        self.assertAlmostEqual(grid_planning.compute_coverage_ratio(visited, [[True, True], [True, False]]), 2 / 3)
+        self.assertAlmostEqual(grid_planning.compute_observed_fraction(visited, [[True, True], [True, False]]), 2 / 3)
         labels, count = grid_planning.connected_components([[True, False, True], [True, False, True]])
         self.assertEqual(count, 2)
         self.assertEqual(labels[0][0], labels[1][0])

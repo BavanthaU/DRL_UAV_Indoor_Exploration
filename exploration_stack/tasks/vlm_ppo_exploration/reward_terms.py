@@ -10,10 +10,10 @@ except ImportError:  # pragma: no cover
 
 @dataclass
 class RewardWeights:
-    success_threshold: float = 0.85
-    w_success: float = 10.0
+    w_frontier_closure: float = 5.0
     w_frontier_progress: float = 0.2
-    w_global_coverage_progress: float = 2.0
+    w_map_progress: float = 1.0
+    w_return_home_progress: float = 1.0
     w_collision: float = 10.0
     w_near_obstacle: float = 1.0
     w_time: float = 0.002
@@ -28,8 +28,8 @@ class RewardWeights:
 
 def compute_extrinsic_reward(
     *,
-    coverage_ratio,
-    prev_coverage_ratio,
+    map_progress,
+    frontier_closed,
     collision,
     esdf_clearance,
     safety_radius,
@@ -41,23 +41,25 @@ def compute_extrinsic_reward(
     altitude,
     target_altitude,
     frontier_distance_delta=None,
+    return_home_progress=None,
     weights: RewardWeights | None = None,
 ):
     weights = weights or RewardWeights()
     if frontier_distance_delta is None:
-        frontier_distance_delta = torch.zeros_like(coverage_ratio)
-    success = (coverage_ratio >= weights.success_threshold).float()
-    delta_coverage = (coverage_ratio - prev_coverage_ratio).clamp_min(0.0)
+        frontier_distance_delta = torch.zeros_like(map_progress)
+    if return_home_progress is None:
+        return_home_progress = torch.zeros_like(map_progress)
     near_obstacle = (float(safety_radius) - esdf_clearance).clamp_min(0.0)
     smoothness = torch.sum(torch.square(action - prev_action), dim=-1)
     altitude_error = torch.abs(altitude - target_altitude)
     terms = {
-        "success": weights.w_success * success,
+        "frontier_closure": weights.w_frontier_closure * frontier_closed.float(),
         "frontier_progress": weights.w_frontier_progress * frontier_distance_delta,
-        "global_coverage_progress": weights.w_global_coverage_progress * delta_coverage,
+        "map_progress": weights.w_map_progress * map_progress,
+        "return_home_progress": weights.w_return_home_progress * return_home_progress,
         "collision": -weights.w_collision * collision.float(),
         "near_obstacle": -weights.w_near_obstacle * near_obstacle,
-        "time": -weights.w_time * torch.ones_like(coverage_ratio) * float(dt),
+        "time": -weights.w_time * torch.ones_like(map_progress) * float(dt),
         "idle": -weights.w_idle * idle_mask.float(),
         "oscillation": -weights.w_oscillation * yaw_flip.float(),
         "action_smoothness": -weights.w_action_smoothness * smoothness,
