@@ -29,8 +29,8 @@ def _ms(fn, repeats: int = 1):
 
 def main() -> None:
     args, config, simulation_app = parse_hierarchical_train_args()
-    env = make_env(config, args)
     model = build_hierarchical_model(config, action_dim=3)
+    env = make_env(config, args)
     log_dir = build_log_dir(config, args)
     trainer, _ = build_hierarchical_trainer(config, args, model, log_dir)
     write_run_config(trainer, config)

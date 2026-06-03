@@ -20,8 +20,8 @@ def main() -> None:
     args, config, simulation_app = parse_hierarchical_train_args()
     if not args.checkpoint:
         raise SystemExit("--checkpoint is required for evaluation.")
-    env = make_env(config, args)
     model = build_hierarchical_model(config, action_dim=3)
+    env = make_env(config, args)
     log_dir = build_log_dir(config, args)
     trainer, _ = build_hierarchical_trainer(config, args, model, log_dir)
     write_run_config(trainer, config)

@@ -11,7 +11,7 @@
   },
   "vlm": {
     "backend": "mobileclip",
-    "model_name": "mobileclip_s2",
+    "model_name": "MobileCLIP-S2",
     "image_mode": "camera_plus_map",
     "image_size": 224,
     "freeze_vlm_encoder": true,

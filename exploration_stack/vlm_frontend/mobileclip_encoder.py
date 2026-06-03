@@ -12,7 +12,7 @@ class MobileCLIPEncoder(VLMEncoder):
         if nn is None:
             raise RuntimeError("MobileCLIPEncoder requires PyTorch.")
         super().__init__()
-        self.model_name = model_name or "MobileCLIP-S1"
+        self.model_name = self._normalize_model_name(model_name or "MobileCLIP-S1")
         self.freeze = freeze
         self.model, self.preprocess = self._load_model(self.model_name)
         self.embedding_dim = self._infer_embedding_dim()
@@ -34,8 +34,11 @@ class MobileCLIPEncoder(VLMEncoder):
         except ImportError as exc:
             raise RuntimeError(
                 "MobileCLIP backend requires the `mobileclip` package or an "
-                "open_clip-compatible MobileCLIP model. Install the backend or "
-                "use vlm_backend=mock only for debug tests."
+                "open_clip-compatible MobileCLIP model. Install it in the active "
+                "Isaac Lab conda environment with:\n"
+                "  python -m pip install open_clip_torch\n"
+                "or run `python -m pip install -r requirements.txt`. Use "
+                "vlm.backend=mock only for CPU/debug tests."
             ) from exc
         model, _, preprocess = open_clip.create_model_and_transforms(model_name, pretrained="datacompdr")
         tokenizer = open_clip.get_tokenizer(model_name)
@@ -67,3 +70,16 @@ class MobileCLIPEncoder(VLMEncoder):
             embedding = self.model.encode_text(tokens)
         return F.normalize(embedding.float(), dim=-1)
 
+    @staticmethod
+    def _normalize_model_name(model_name: str) -> str:
+        aliases = {
+            "mobileclip_s0": "MobileCLIP-S0",
+            "mobileclip-s0": "MobileCLIP-S0",
+            "mobileclip_s1": "MobileCLIP-S1",
+            "mobileclip-s1": "MobileCLIP-S1",
+            "mobileclip_s2": "MobileCLIP-S2",
+            "mobileclip-s2": "MobileCLIP-S2",
+            "mobileclip_b": "MobileCLIP-B",
+            "mobileclip-b": "MobileCLIP-B",
+        }
+        return aliases.get(model_name.lower(), model_name)

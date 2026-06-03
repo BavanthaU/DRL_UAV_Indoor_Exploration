@@ -18,8 +18,8 @@ def main() -> None:
     args, config, simulation_app = parse_train_args()
     log_dir = build_log_dir(config, args)
     env_backend = config.get("environment", {}).get("backend", "debug")
-    env = make_debug_env(config, args) if env_backend == "debug" else make_isaac_env(config, args)
     model = build_model(config, action_dim=3)
+    env = make_debug_env(config, args) if env_backend == "debug" else make_isaac_env(config, args)
     trainer, max_iterations = build_trainer(config, args, model, log_dir)
     write_run_config(trainer, config)
     if args.checkpoint:
