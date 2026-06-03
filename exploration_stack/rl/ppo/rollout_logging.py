@@ -68,6 +68,22 @@ class StructuredRunLogger:
             artifact.add_file(str(artifact_path))
         self._wandb_run.log_artifact(artifact, aliases=aliases)
 
+    def log_image(
+        self,
+        key: str,
+        path: str | Path,
+        *,
+        step: int = 0,
+        caption: str | None = None,
+        enabled_key: str | None = None,
+    ) -> None:
+        if not self.should_log_artifact(enabled_key):
+            return
+        image_path = Path(path)
+        if not image_path.exists():
+            return
+        self._wandb_run.log({key: self._wandb.Image(str(image_path), caption=caption)}, step=int(step))
+
     def should_log_artifact(self, enabled_key: str | None = None) -> bool:
         if self._wandb_run is None:
             return False

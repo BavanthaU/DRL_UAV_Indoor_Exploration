@@ -121,6 +121,7 @@ def resolve_wandb_config(config: dict[str, Any], args: argparse.Namespace, log_d
     wandb_cfg.setdefault("log_config", True)
     wandb_cfg.setdefault("log_checkpoints", True)
     wandb_cfg.setdefault("log_eval", True)
+    wandb_cfg.setdefault("log_eval_maps", True)
     wandb_cfg.setdefault("log_profile", True)
     wandb_cfg.setdefault("log_exports", True)
     wandb_cfg.setdefault("log_rollouts", False)

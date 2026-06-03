@@ -36,4 +36,15 @@ cd /home/bavantha/IsaacLab
   --num_envs 16 \
   --wandb_project vlm-hierarchical-ppo-uav-exploration
 
+# Evaluate a checkpoint and upload the best explored-map image to W&B
+./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/eval_vlm_hierarchical_ppo_explorer.py \
+  --task Isaac-VLM-Hierarchical-PPO-UAV-Exploration-v0 \
+  --config /home/bavantha/Autonomous_Drone/configs/vlm_hierarchical_ppo/planner_dropout_main.yaml \
+  --checkpoint /path/to/hierarchical_policy_update_XXXXXX.pt \
+  --headless \
+  --enable_cameras \
+  --num_envs 4 \
+  --num_eval_episodes 10 \
+  --wandb_project vlm-hierarchical-ppo-uav-exploration
+
 cd /home/bavantha/Autonomous_Drone

@@ -108,6 +108,28 @@ cd /home/bavantha/IsaacLab
 Use `--wandb_mode disabled` for local-only runs or `--wandb_mode offline` for
 offline W&B logging.
 
+## Evaluation Map Upload
+
+Evaluation writes `eval_maps/best_explored_map.png` and uploads it to W&B as
+`eval/best_explored_map` when W&B eval logging is enabled. The selected image is
+the best evaluated episode by mapped free cells, with return used as the
+tiebreaker. The image comes from the agent's internal explored map only: unknown
+space, observed free space, observed obstacle cells when available, frontier,
+trajectory, and robot pose.
+
+```sh
+cd /home/bavantha/IsaacLab
+./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/eval_vlm_hierarchical_ppo_explorer.py \
+  --task Isaac-VLM-Hierarchical-PPO-UAV-Exploration-v0 \
+  --config /home/bavantha/Autonomous_Drone/configs/vlm_hierarchical_ppo/planner_dropout_main.yaml \
+  --checkpoint /path/to/hierarchical_policy_update_XXXXXX.pt \
+  --headless \
+  --enable_cameras \
+  --num_envs 4 \
+  --num_eval_episodes 10 \
+  --wandb_project vlm-hierarchical-ppo-uav-exploration
+```
+
 ## Tests
 
 ```sh

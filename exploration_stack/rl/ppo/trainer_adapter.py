@@ -216,7 +216,10 @@ class TorchPPOTrainerAdapter(TrainerAdapter):
         )
 
     def load(self, path: str) -> None:
-        checkpoint = torch.load(path, map_location=self.device)
+        try:
+            checkpoint = torch.load(path, map_location=self.device, weights_only=False)
+        except TypeError:  # pragma: no cover - older PyTorch does not expose weights_only
+            checkpoint = torch.load(path, map_location=self.device)
         self.model.load_state_dict(checkpoint["model"])
         if "optimizer" in checkpoint:
             self.optimizer.load_state_dict(checkpoint["optimizer"])

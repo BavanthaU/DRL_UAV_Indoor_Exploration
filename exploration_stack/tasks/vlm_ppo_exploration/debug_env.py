@@ -162,6 +162,7 @@ class DebugVlmPpoVectorEnv:
             "return_home_phase": return_home.float(),
             "home_distance": home_distance,
         }
+        reward_terms = {key: value.detach().clone() for key, value in reward_terms.items()}
         self._prev_actions = actions.detach().clone()
         self._prev_mapped_free_cells = self._mapped_free_cells.detach().clone()
         self._prev_home_distance = home_distance.detach().clone()
