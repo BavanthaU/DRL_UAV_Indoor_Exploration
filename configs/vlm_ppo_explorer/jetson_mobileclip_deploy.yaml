@@ -1,0 +1,59 @@
+{
+  "run_name": "jetson_mobileclip_deploy_profile",
+  "seed": 45,
+  "device": "cpu",
+  "environment": {
+    "backend": "debug",
+    "exploration_mode": "hierarchical_frontier_guided",
+    "num_envs": 1,
+    "grid_size": 32,
+    "crop_size": 16,
+    "max_steps": 32,
+    "sensor_radius_cells": 3,
+    "success_threshold": 0.60,
+    "stuck_steps": 24
+  },
+  "vlm": {
+    "backend": "mobileclip",
+    "model_name": "MobileCLIP-S1",
+    "image_mode": "camera_plus_map",
+    "image_size": 224,
+    "freeze_vlm_encoder": true,
+    "train_vlm_lora": false,
+    "latent_dim": 128,
+    "memory_type": "gru",
+    "memory_steps": 8,
+    "use_depth_line": true,
+    "use_semantic_line": true,
+    "use_map_crop": true,
+    "use_frontier_mask": true,
+    "depth_line_dim": 64,
+    "semantic_line_dim": 64,
+    "subgoal_feature_dim": 5,
+    "lora_vlm_encoder": {"enabled": false, "rank": 8, "target_modules": []}
+  },
+  "ppo": {
+    "backend": "torch_reference",
+    "num_envs": 1,
+    "max_iterations": 1,
+    "rollout_length": 8,
+    "minibatches": 1,
+    "learning_epochs": 1,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_param": 0.2,
+    "entropy_coef": 0.01,
+    "value_loss_coef": 1.0,
+    "learning_rate": 0.0003,
+    "max_grad_norm": 1.0,
+    "normalize_observations": true,
+    "normalize_rewards": true,
+    "mixed_precision": false
+  },
+  "intrinsic": {
+    "count": {"beta": 1.0},
+    "rnd": {"enabled": false, "beta": 0.0},
+    "semantic_novelty": {"beta": 0.02}
+  },
+  "logging": {"root": "logs/vlm_ppo_explorer"}
+}

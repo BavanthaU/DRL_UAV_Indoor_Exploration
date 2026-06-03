@@ -1,0 +1,55 @@
+{
+  "run_name": "rtx4080_siglip_vlm_ppo",
+  "seed": 43,
+  "environment": {
+    "backend": "isaac",
+    "exploration_mode": "hierarchical_frontier_guided",
+    "map": {"grid_size": 64, "crop_size": 32, "resolution_m": 0.25, "sensor_radius_cells": 3, "success_threshold": 0.85, "stuck_steps": 80},
+    "action": {"action_mode": "body_xy_yawrate_altitude_hold", "max_vx_mps": 1.0, "max_vy_mps": 0.6, "max_yaw_rate_radps": 1.0, "target_altitude_m": 1.2, "min_altitude_m": 0.8, "max_altitude_m": 1.8}
+  },
+  "vlm": {
+    "backend": "siglip",
+    "model_name": "google/siglip-base-patch16-224",
+    "image_mode": "camera_plus_map",
+    "image_size": 224,
+    "freeze_vlm_encoder": true,
+    "train_vlm_lora": false,
+    "latent_dim": 256,
+    "memory_type": "gru",
+    "memory_steps": 8,
+    "use_depth_line": true,
+    "use_semantic_line": true,
+    "use_map_crop": true,
+    "use_frontier_mask": true,
+    "depth_line_dim": 64,
+    "semantic_line_dim": 64,
+    "subgoal_feature_dim": 5,
+    "cache_text_embeddings": true,
+    "lora_vlm_encoder": {"enabled": false, "rank": 8, "target_modules": []}
+  },
+  "ppo": {
+    "backend": "torch_reference",
+    "num_envs": 8,
+    "max_iterations": 1000,
+    "rollout_length": 64,
+    "minibatches": 4,
+    "learning_epochs": 5,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_param": 0.2,
+    "entropy_coef": 0.01,
+    "value_loss_coef": 1.0,
+    "learning_rate": 0.0003,
+    "max_grad_norm": 1.0,
+    "normalize_observations": true,
+    "normalize_rewards": true,
+    "mixed_precision": true
+  },
+  "intrinsic": {
+    "count": {"beta": 1.0},
+    "rnd": {"enabled": true, "beta": 0.05, "hidden_dim": 128, "output_dim": 64, "learning_rate": 0.0001, "reward_clip": 5.0},
+    "semantic_novelty": {"beta": 0.02}
+  },
+  "teacher": {"model_name": "Qwen/Qwen2.5-VL-7B-Instruct", "fallback_model_name": "Qwen/Qwen2.5-VL-3B-Instruct"},
+  "logging": {"root": "logs/vlm_ppo_explorer"}
+}

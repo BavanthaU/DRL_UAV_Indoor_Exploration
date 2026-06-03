@@ -88,6 +88,41 @@ For new no-imitation-learning RL experiments, use the map-progress task:
 `Drone_SAC_no_IL_MapProgress_V1`. It removes hard-coded doorway/room reward
 shortcuts from the training MDP. See `docs/reward_design.md`.
 
+## VLM-PPO curiosity explorer
+A separate PPO-based exploration path has been added for the next training
+direction:
+
+`Isaac-VLM-PPO-UAV-Exploration-v0`
+
+This task uses continuous body-frame velocity/yaw-rate actions, altitude hold,
+VLM image/map observations, frontier-guided subgoal features, new-cell
+curiosity, optional RND, and structured logging. It is independent from the old
+IL/SAC configs and uses the existing indoor office USD assets for the Isaac
+task.
+
+Debug smoke run:
+```sh
+conda activate env_isaaclab
+python scripts/train_vlm_ppo_explorer.py \
+  --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
+  --max_iterations 1 \
+  --num_envs 2
+```
+
+Isaac Lab training:
+```sh
+cd /home/bavantha/IsaacLab
+./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/train_vlm_ppo_explorer.py \
+  --task Isaac-VLM-PPO-UAV-Exploration-v0 \
+  --config /home/bavantha/Autonomous_Drone/configs/vlm_ppo_explorer/rtx4080_mobileclip_train.yaml \
+  --headless \
+  --enable_cameras \
+  --num_envs 16
+```
+
+See `docs/vlm_ppo_curiosity_explorer.md` for architecture, configs, profiling,
+rollout collection, teacher labeling, ONNX export, and verification notes.
+
 If you need the tracked model/checkpoint files, install Git LFS before cloning:
 ```sh
 git lfs install
