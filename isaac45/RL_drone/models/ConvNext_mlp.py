@@ -29,7 +29,7 @@ class ConvNeXtTinyImageFeatureExtractor(nn.Module):
 
         # Get input channels from observation space
         input_channels = observation_space.shape[0]
-        super().__init__(observation_space, features_dim)
+        super().__init__()
  
         # Load ConvNeXt-Tiny and modify input layer
         convnext = models.convnext_tiny(weights=models.ConvNeXt_Tiny_Weights.IMAGENET1K_V1)

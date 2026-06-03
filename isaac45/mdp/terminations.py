@@ -11,6 +11,8 @@ if TYPE_CHECKING:
 import numpy as np
 import datetime
 
+from isaac45.paths import IMAGE_DIR, ensure_dir
+
 
 def quat_to_euler(quaternions):
     """Converts a batch of quaternions to Euler angles (roll, pitch, yaw)."""
@@ -57,7 +59,7 @@ def drone_crashes_single_contact_sensor(env:ManagerBasedRLEnv, force_threshold: 
 
     #     ax.axis('off')
     #     plt.tight_layout()
-    #     filename = f'/workspace/isaaclab/DRL_UAV_Indoor_Exploration/images/occ_map_collision_{env_idx}_{timestamp}.png'
+    #     filename = ensure_dir(IMAGE_DIR) / f"occ_map_collision_{env_idx}_{timestamp}.png"
     #     plt.savefig(filename)
     #     plt.close(fig)
     return result
@@ -98,7 +100,7 @@ def drone_covers_fixed_area(env: ManagerBasedRLEnv, num_cells_to_cover: int) -> 
 
         ax.axis('off')
         plt.tight_layout()
-        filename = f'/workspace/isaaclab/DRL_UAV_Indoor_Exploration/images/occ_map_fully_explored{env_idx}_{timestamp}.png'
+        filename = ensure_dir(IMAGE_DIR) / f"occ_map_fully_explored{env_idx}_{timestamp}.png"
         plt.savefig(filename)
         plt.close(fig)
     if torch.any(result):
@@ -169,7 +171,7 @@ def drone_covers_fixed_area_4_SCENES(env: ManagerBasedRLEnv, num_cells_to_cover:
 
         ax.axis('off')
         plt.tight_layout()
-        filename = f'/workspace/isaaclab/DRL_UAV_Indoor_Exploration/images/occ_map_fully_explored{env_idx}_{timestamp}.png'
+        filename = ensure_dir(IMAGE_DIR) / f"occ_map_fully_explored{env_idx}_{timestamp}.png"
         plt.savefig(filename)
         plt.close(fig)
     return result

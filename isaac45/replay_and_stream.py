@@ -2,6 +2,11 @@ import argparse
 import sys
 import os
 import time
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 # --- Isaac Kit app MUST be created first ---
 from isaaclab.app import AppLauncher
@@ -46,10 +51,10 @@ from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
 # your project bits (exactly like validation)
-import DRL_UAV_Indoor_Exploration.isaac45.RL_drone  # registers custom gym environments
-from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
-import DRL_UAV_Indoor_Exploration.isaac45.utils.env_mapping_classes as env_mapping
-from DRL_UAV_Indoor_Exploration.isaac45.utils.sac import SAC
+import isaac45.RL_drone  # registers custom gym environments
+from isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
+import isaac45.utils.env_mapping_classes as env_mapping
+from isaac45.utils.sac import SAC
 from stable_baselines3.common.vec_env import VecNormalize
 
 

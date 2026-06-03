@@ -13,11 +13,11 @@ if TYPE_CHECKING:
     from isaaclab.envs import ManagerBasedEnv
     from . import custom_actions_cfg
 
-from mdp.actions.quadrotor_controller import RLSetpointController 
-from mdp.actions.quadrotor_controller_2D_action import RL2DSetpointController 
-from mdp.actions.quadrotor_controller_discrete_action_limited_5vals import RLDiscreteLimited5ValuesSetpointController
-from mdp.actions.quadrotor_controller_manual import KeyboardInputActions
-from mdp.actions.quadrotor_controller_manual import KeyboardSetpointController
+from .quadrotor_controller import RLSetpointController
+from .quadrotor_controller_2D_action import RL2DSetpointController
+from .quadrotor_controller_discrete_action_limited_5vals import RLDiscreteLimited5ValuesSetpointController
+from .quadrotor_controller_manual import KeyboardInputActions
+from .quadrotor_controller_manual import KeyboardSetpointController
 
 class KeyBoardDrivenAction(ActionTerm):
     
@@ -435,5 +435,4 @@ class IdealRLDrivenAction2D(ActionTerm):
         )
     def apply_actions(self):
         self._asset.write_root_state_to_sim(root_state=self._processed_actions)
-
 

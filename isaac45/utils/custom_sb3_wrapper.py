@@ -32,11 +32,13 @@ from isaaclab.envs import DirectRLEnv, ManagerBasedRLEnv
 """
 Vectorized environment wrapper.
 """
-def process_sb3_cfg(cfg: dict) -> dict:
+def process_sb3_cfg(cfg: dict, num_envs: int | None = None) -> dict:
     """Convert simple YAML types to Stable-Baselines classes/components.
 
     Args:
         cfg: A configuration dictionary.
+        num_envs: Optional number of vectorized environments, used when a config
+            specifies ``n_minibatches`` instead of an explicit ``batch_size``.
 
     Returns:
         A dictionary containing the converted configuration.
@@ -64,6 +66,10 @@ def process_sb3_cfg(cfg: dict) -> dict:
                         hyperparams[key] = constant_fn(float(value))
                     else:
                         raise ValueError(f"Invalid value for {key}: {hyperparams[key]}")
+
+        if num_envs is not None and "n_minibatches" in hyperparams:
+            hyperparams["batch_size"] = (hyperparams.get("n_steps", 2048) * num_envs) // hyperparams["n_minibatches"]
+            del hyperparams["n_minibatches"]
 
         return hyperparams
 
@@ -139,8 +145,9 @@ class Sb3VecEnvWrapper(VecEnv):
         self.num_envs = self.unwrapped.num_envs
         self.sim_device = self.unwrapped.device
         self.render_mode = self.unwrapped.render_mode
-        self.unwrapped.actions = torch.zeros((40, 2), dtype=torch.float32)
-        self.prev_occ_cells = 0
+        action_shape = getattr(self.unwrapped.single_action_space, "shape", (1,))
+        action_dim = int(np.prod(action_shape)) if action_shape else 1
+        self.unwrapped.actions = torch.zeros((self.num_envs, action_dim), dtype=torch.float32, device=self.sim_device)
         # obtain gym spaces
         # note: stable-baselines3 does not like when we have unbounded action space so
         #   we set it to some high value here. Maybe this is not general but something to think about.
@@ -246,7 +253,7 @@ class Sb3VecEnvWrapper(VecEnv):
         self._occ_cells_buf = non_zero_cells_per_env.float()
         # compute reset ids
         dones = terminated | truncated
-        reset_ids = (dones > 0).nonzero(as_tuple=False)
+        reset_ids = (dones > 0).nonzero(as_tuple=False).squeeze(-1)
 
         # convert data types to numpy depending on backend
         # note: ManagerBasedRLEnv uses torch backend (by default).
@@ -256,7 +263,8 @@ class Sb3VecEnvWrapper(VecEnv):
         truncated = truncated.detach().cpu().numpy()
         dones = dones.detach().cpu().numpy()
         # convert extra information to list of dicts
-        infos = self._process_extras(obs, terminated, truncated, extras, reset_ids)
+        reset_ids_np = reset_ids.detach().cpu().numpy().astype(int)
+        infos = self._process_extras(obs, terminated, truncated, extras, reset_ids_np)
 
         # reset info for terminated environments
         self._ep_rew_buf[reset_ids] = 0
@@ -326,6 +334,7 @@ class Sb3VecEnvWrapper(VecEnv):
         """Convert miscellaneous information into dictionary for each sub-environment."""
         # create empty list of dictionaries to fill
         infos: list[dict[str, Any]] = [dict.fromkeys(extras.keys()) for _ in range(self.num_envs)]
+        reset_id_set = set(int(idx) for idx in np.asarray(reset_ids).reshape(-1))
 
 
         # fill-in information for each sub-environment
@@ -333,11 +342,11 @@ class Sb3VecEnvWrapper(VecEnv):
         for idx in range(self.num_envs):
             # fill-in episode monitoring info
             # print(self._occ_cells_buf[idx])
-            if idx in reset_ids:
+            if idx in reset_id_set:
                 infos[idx]["episode"] = dict()
                 infos[idx]["episode"]["r"] = float(self._ep_rew_buf[idx])
                 infos[idx]["episode"]["l"] = float(self._ep_len_buf[idx])
-                infos[idx]["episode"]["occupied_cells"] = float(self.prev_occ_cells)
+                infos[idx]["episode"]["occupied_cells"] = float(self._occ_cells_buf[idx])
             
                 
             else:
@@ -358,7 +367,7 @@ class Sb3VecEnvWrapper(VecEnv):
                     infos[idx][key] = value[idx]
             # add information about terminal observation separately
              # Convert tensor to Python scalar
-            if idx in reset_ids:
+            if idx in reset_id_set:
                 # extract terminal observations
                 if isinstance(obs, dict):
                     terminal_obs = dict.fromkeys(obs.keys())
@@ -371,6 +380,4 @@ class Sb3VecEnvWrapper(VecEnv):
             else:
                 infos[idx]["terminal_observation"] = None
         # return list of dictionaries
-        self.prev_occ_cells = self._occ_cells_buf[idx]
         return infos
-

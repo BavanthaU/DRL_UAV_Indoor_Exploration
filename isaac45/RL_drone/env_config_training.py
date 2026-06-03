@@ -1,29 +1,21 @@
 import isaaclab.sim as sim_utils
-from isaaclab.assets import ArticulationCfg, AssetBaseCfg, DeformableObjectCfg, RigidObjectCfg
+from isaaclab.assets import ArticulationCfg, AssetBaseCfg
 from isaaclab.envs import ManagerBasedRLEnvCfg
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import ObservationGroupCfg as ObsGroup
 from isaaclab.managers import ObservationTermCfg as ObsTerm
 from isaaclab.managers import RewardTermCfg as RewTerm
-from isaaclab.managers import SceneEntityCfg
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.utils import configclass
 from isaaclab.sensors import CameraCfg, ContactSensorCfg
-from isaaclab.sensors import RayCasterCfg, patterns
-from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-from isaaclab.envs import ManagerBasedEnv
-
-import torch
-import sys
-from pathlib import Path
 
 # Custom MDP logic (actions, observations, rewards, terminations)
-from DRL_UAV_Indoor_Exploration.isaac45 import mdp
+from isaac45 import mdp
+from isaac45.paths import ENVIRONMENT_DIR
 
 # Drone_models directory
-from DRL_UAV_Indoor_Exploration.isaac45.drone_models.iris_contact import get_iris_config
-from DRL_UAV_Indoor_Exploration.isaac45.drone_models.quadrotor import get_quadrotor_config
+from isaac45.drone_models.iris_contact import get_iris_config
 
 
 @configclass
@@ -31,22 +23,22 @@ class QuadrotorSceneCfg(InteractiveSceneCfg):
     # Office environments at different positions
     office_1 = AssetBaseCfg(
         prim_path = "{ENV_REGEX_NS}/office1", 
-        spawn=sim_utils.UsdFileCfg(usd_path=str(Path("DRL_UAV_Indoor_Exploration/isaac45/environments/TrainEnvOffice1.usd").resolve())), 
+        spawn=sim_utils.UsdFileCfg(usd_path=str(ENVIRONMENT_DIR / "TrainEnvOffice1.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos = (0.0, 0.0, 0),))
 
     office_2 = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/office2",
-        spawn=sim_utils.UsdFileCfg(usd_path=str(Path("DRL_UAV_Indoor_Exploration/isaac45/environments/TrainEnvOffice2.usd").resolve())), 
+        spawn=sim_utils.UsdFileCfg(usd_path=str(ENVIRONMENT_DIR / "TrainEnvOffice2.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos = (25.0, 0.0, 0),))
 
     office_3 = AssetBaseCfg(
         prim_path="{ENV_REGEX_NS}/office3",
-        spawn=sim_utils.UsdFileCfg(usd_path=str(Path("DRL_UAV_Indoor_Exploration/isaac45/environments/TrainEnvOffice3.usd").resolve())), 
+        spawn=sim_utils.UsdFileCfg(usd_path=str(ENVIRONMENT_DIR / "TrainEnvOffice3.usd")),
         init_state=AssetBaseCfg.InitialStateCfg(pos = (0.0, 20.0, 0),))
 
     # office_4 = AssetBaseCfg(
     #     prim_path="{ENV_REGEX_NS}/office4",
-    #     spawn=sim_utils.UsdFileCfg(usd_path=str(Path("DRL_UAV_Indoor_Exploration/isaac45/environments/TrainEnvOffice4.usd").resolve())), 
+    #     spawn=sim_utils.UsdFileCfg(usd_path=str(ENVIRONMENT_DIR / "TrainEnvOffice4.usd")),
     #     init_state=AssetBaseCfg.InitialStateCfg(pos = (20.0, 20.0, 0),)
     # )
 

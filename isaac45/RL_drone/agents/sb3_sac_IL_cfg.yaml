@@ -28,5 +28,5 @@ policy_kwargs: "dict(
                 
 
 device: 'cuda:1'  
-buffer_size: 400000  # Replay buffer size
+buffer_size: 80000  # Replay buffer size; dict/image observations make larger buffers memory-heavy
 learning_starts: 0  # Number of steps before training starts. 0 with pretraining, since replay buffer is filled with IL trajectories. 

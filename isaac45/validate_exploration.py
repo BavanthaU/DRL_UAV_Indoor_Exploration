@@ -6,6 +6,11 @@ Through task name can the testing environment be changed to A, B or C.
 
 import argparse
 import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from isaaclab.app import AppLauncher
 
@@ -27,16 +32,17 @@ sys.argv = [sys.argv[0]] + [arg for arg in hydra_args if not arg.startswith("--/
 # Import packages to use gymnasium environments
 import gymnasium as gym
 import random
-from DRL_UAV_Indoor_Exploration.isaac45.RL_drone.custom_feature_extractor import check_custom_feature_extractor_in_sb3_cfg
-import DRL_UAV_Indoor_Exploration.isaac45.utils.env_mapping_classes as env_mapping
-from DRL_UAV_Indoor_Exploration.isaac45.utils.sac import SAC
+import pickle
+from isaac45.RL_drone.custom_feature_extractor import check_custom_feature_extractor_in_sb3_cfg
+import isaac45.utils.env_mapping_classes as env_mapping
+from isaac45.utils.sac import SAC
 
 # Import used RL Isaac Lab libraries
 from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_yaml, dump_pickle
+from isaaclab.utils.io import dump_yaml
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
+from isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
 
 # Stable-Baselines3 tools
 from stable_baselines3.common.vec_env import VecNormalize
@@ -50,10 +56,18 @@ import torch.nn as nn
 import torch
 import csv
 import os
+from isaac45.paths import EVALUATION_DIR, ensure_dir
+
+
+def dump_pickle(filename: str, data: object) -> None:
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    with open(filename, "wb") as file:
+        pickle.dump(data, file)
+
 
 # Create csv file for saving evaluation data. 
 timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-filename_data = f'DRL_UAV_Indoor_Exploration/evaluation_files/{args_cli.task}_data_{timestamp}.csv'
+filename_data = ensure_dir(EVALUATION_DIR) / f"{args_cli.task}_data_{timestamp}.csv"
 file_exists = os.path.isfile(filename_data)
 if not os.path.isfile(filename_data) or os.path.getsize(filename_data) == 0:
     with open(filename_data, 'w', newline='') as file:
@@ -89,7 +103,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
 
     # Post-process agent configuration
-    agent_cfg = process_sb3_cfg(agent_cfg)
+    agent_cfg = process_sb3_cfg(agent_cfg, env_cfg.scene.num_envs)
     agent_cfg = check_custom_feature_extractor_in_sb3_cfg(agent_cfg)
 
     # Read configurations about the agent-training
@@ -120,6 +134,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     # agent = SAC(policy_arch, env, verbose=1, **agent_cfg)
     
     if args_cli.val_IL:
+        agent = SAC(policy_arch, env, verbose=1, **agent_cfg)
         checkpoint_path = args_cli.checkpoint
         bc_model = torch.load(checkpoint_path, map_location="cpu")
         state_dict = bc_model["state_dict"] if isinstance(bc_model, dict) and "state_dict" in bc_model else bc_model

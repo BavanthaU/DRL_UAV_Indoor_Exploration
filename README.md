@@ -19,7 +19,7 @@ This repository contains several important directories:
   - `demo_dataset_loader.py` – Loads expert trajectories and feeds them to IL training.
   - `model/` – Defines the neural network architecture used in IL, matching the layers and nodes of the SAC networks used in RL.
 
-- **`isaac45/`** – Contains the main scripts for training and evaluating RL algorithms in Isaac Sim 4.5.0, along with supporting directories required for these scripts:
+- **`isaac45/`** – Contains the main scripts for training and evaluating RL algorithms in Isaac Lab. The folder name is kept for compatibility, but the code has been adapted for Isaac Sim 5.1 and Isaac Lab 2.3.2:
   - **Main scripts:**
     - `train_exploration.py` – Script to train RL exploration policies.
     - `validate_exploration.py` – Script to evaluate trained IL and RL policies.
@@ -36,109 +36,104 @@ This repository contains several important directories:
 ## Setup
 
 ### Dependencies
-- Isaac Sim (4.5.0)
-- Isaac Lab (2.1.0)
-- Kornia (0.8.1)
+- Isaac Sim 5.1.0
+- Isaac Lab 2.3.2
+- Python 3.11 conda environment for Isaac Lab
+- Project Python dependencies in `requirements.txt`
 
 ### Environment Setting
-This project has been developed inside a Docker container on a remote server. 
+The current setup is conda-based. The repository can be cloned anywhere; the scripts resolve their own USD and output paths.
 
-**0. Download the Base Image of Isaac Sim (Optional)**
-Follow the instructions in the [official Nvidia website](https://docs.isaacsim.omniverse.nvidia.com/4.5.0/installation/install_container.html).
-
-If you are working on the ITC University of Twente server, pulling the Isaac Sim Docker image as described in Step 6 of the Container Deployment section is the only step needed: docker pull nvcr.io/nvidia/isaac-sim:4.5.0
-
-**1. Create the Docker Base Image with Isaac Sim and Isaac Lab:**
-
-Clone the IsaacLab repository and go to the branch corresponding to the version you want to use:
+Clone IsaacLab and use the release corresponding to Isaac Lab 2.3.2:
 ```sh
 git clone https://github.com/isaac-sim/IsaacLab.git
 cd IsaacLab/
-git fetch origin
-git checkout -b isaaclab-v2.1.0
+git checkout v2.3.2
 ```
 
-Create an IsaacLab docker image and container. It will ask you to enable X-forwarding, do not enable. Then enter the docker. 
+Create or activate the Isaac Lab conda environment:
 ```sh
-./docker/container.sh start
-./docker/container.sh enter
+./isaaclab.sh -c env_isaaclab
+conda activate env_isaaclab
+./isaaclab.sh -i
 ```
 
-This repository includes large trained IL or RL model files that are stored with **Git LFS**.  
-If you want to clone and use the repository correctly, follow these steps:
-
+Install this project's extra dependencies:
 ```sh
-apt-get update
-apt-get install git-lfs -y
+cd /home/bavantha/Autonomous_Drone
+python -m pip install -r requirements.txt
+```
+
+If you need the tracked model/checkpoint files, install Git LFS before cloning:
+```sh
 git lfs install
-```
-Once Git LFS is installed, clone as usual:
-```sh
-git clone https://github.com/DesireeNP2/DRL_UAV_Indoor_Exploration.git
+git clone https://github.com/BavanthaU/DRL_UAV_Indoor_Exploration.git
 ```
 
 ## ⚙️ Usage
 ### Train IL algorithm with Behavior Cloning
 To train IL algorithm run:
 ```sh
-cd DRL_UAV_Indoor_Exploration/imitation_learning
-python3 IL_train.py --max_iters 1000 --demo_dir /workspace/isaaclab/DRL_UAV_Indoor_Exploration/trained_model_and_trajectories/expert_trajectories/
+cd /home/bavantha/Autonomous_Drone
+conda activate env_isaaclab
+python -m imitation_learning.IL_train --max_iters 1000
 ```
-Depending on your file structure, the flag demo_dir might need a different argument. 
+Use `--demo_dir` if your expert demonstrations are outside `trained_model_and_trajectories/expert_trajectories/`.
 
 
 ### Train RL algorithms with SAC with or without pretraining.
-The GUI can be visualized through the Isaac Sim WebRTC Streaming Client by adding the flag **`--livestream=2`** to any launched command instead of the --headless flag. The streaming client has to be connected through the IP address. Type **`hostname -I`** in terminal to get IP address. 
+The GUI can be visualized through the Isaac Sim WebRTC Streaming Client by adding `--livestream=2` instead of `--headless`. The streaming client has to be connected through the IP address. Type `hostname -I` in terminal to get the IP address.
 
 
 **With IL pretraining and filling replay buffer**. 
-Add path to IL model at the end. You should be in the isaaclab directory. cd **`/workspace/isaaclab`**
+Use an absolute path to the script so it works even when the repo is outside the IsaacLab checkout.
 ```sh
-CUDA_VISIBLE_DEVICES=1 ./isaaclab.sh \
-  -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py \
+conda activate env_isaaclab
+CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/train_exploration.py \
   --enable_cameras \
   --num_envs 10 \
   --headless \
-  --task Drone_SAC_IL \
+  --task Drone_SAC_IL_V1 \
   --use_IL \
   --fill_replay_buffer \
-  --IL_model_path /workspace/isaaclab/DRL_UAV_Indoor_Exploration/trained_model_and_trajectories/IL_models_observations/BC_O4.pth
+  --IL_model_path /home/bavantha/Autonomous_Drone/trained_model_and_trajectories/IL_models_observations/BC_O4.pth
 ```
-Depending on your file structure, the flag IL_model_path might need a different argument. 
+Depending on your file structure, the `IL_model_path` argument might need a different value.
 
 **With IL pretraining, buffer already exists**
 ```sh
-CUDA_VISIBLE_DEVICES=1 ./isaaclab.sh \
-  -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py \
+conda activate env_isaaclab
+CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/train_exploration.py \
   --enable_cameras \
   --num_envs 10 \
   --headless \
-  --task Drone_SAC_IL \
+  --task Drone_SAC_IL_V1 \
   --use_IL \
-  --IL_model_path /workspace/isaaclab/DRL_UAV_Indoor_Exploration/trained_model_and_trajectories/IL_models_observations/BC_O4.pth\
+  --IL_model_path /home/bavantha/Autonomous_Drone/trained_model_and_trajectories/IL_models_observations/BC_O4.pth \
   --buffer_path logs/sb3/replay_buffer_widelens.pkl
 ```
 
 **Without IL pretraining (SAC only)** 
 ```sh
-CUDA_VISIBLE_DEVICES=1 ./isaaclab.sh \
-  -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py \
+conda activate env_isaaclab
+CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/train_exploration.py \
   --enable_cameras \
   --num_envs 10 \
   --headless \
-  --task Drone_SAC_no_IL
+  --task Drone_SAC_no_IL_V1 \
+  --wandb_mode disabled
 ```
 
 ### Evaluate IL or RL Policies
 You can evaluate trained IL or RL policies in different environments. Change the `--task` flag to select the environment you want to evaluate in: `envA`, `envB`, or `envC`.
 ```sh
-CUDA_VISIBLE_DEVICES=1 ./isaaclab.sh \
-  -p DRL_UAV_Indoor_Exploration/isaac45/validate_exploration.py \
+conda activate env_isaaclab
+CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/validate_exploration.py \
   --enable_cameras \
   --num_envs 1 \
   --headless \
   --task Drone_eval_envA \
-  --checkpoint /workspace/isaaclab/DRL_UAV_Indoor_Exploration/trained_model_and_trajectories/RL_models/BC_SAC.zip
+  --checkpoint /home/bavantha/Autonomous_Drone/trained_model_and_trajectories/RL_models/BC_SAC.zip
 ```
 
 
@@ -150,9 +145,9 @@ Create an SSH tunnel from your machine to the server:
 ```sh
 ssh -L 6006:localhost:6006 <username>@<servername>
 ```
-Enter the Docker container running Isaac Lab:
+Activate the conda environment:
 ```sh
-docker exec -it isaac-lab-base bash
+conda activate env_isaaclab
 ```
 Launch TensorBoard inside the container:
 ```sh

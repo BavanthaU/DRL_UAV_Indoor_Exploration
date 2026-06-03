@@ -5,12 +5,13 @@
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
-from pathlib import Path
+
+from isaac45.paths import DRONE_MODEL_DIR
 
 def get_iris_config():
     IRIS_CONFIG = ArticulationCfg(
         spawn=sim_utils.UsdFileCfg(
-            usd_path=str(Path("DRL_UAV_Indoor_Exploration/isaac45/drone_models/iris.usd")),
+            usd_path=str(DRONE_MODEL_DIR / "iris.usd"),
             rigid_props=sim_utils.RigidBodyPropertiesCfg(
                 rigid_body_enabled=True,
                 max_linear_velocity=1000.0,

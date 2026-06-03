@@ -1,13 +1,17 @@
-GPU_ID=1 ./docker/container.py start  
-./docker/container.py enter base 
+# Isaac Sim 5.1 / Isaac Lab 2.3.2 conda setup
+cd /home/bavantha/IsaacLab
+git checkout v2.3.2
+./isaaclab.sh -c env_isaaclab
+conda activate env_isaaclab
+./isaaclab.sh -i
 
-# Core fixes
-python -m pip install --upgrade --force-reinstall \
-  "numpy<2" \
-  "opencv-python==4.8.1.78" \
-  "lxml>=4.9.2,<5.0" \
-  "quadprog>=0.1.11" \
-  "usd-core>=21.11,<24.0"
+cd /home/bavantha/Autonomous_Drone
+python -m pip install -r requirements.txt
 
-./isaaclab.sh -p DRL_UAV_Indoor_Exploration/isaac45/train_exploration.py     --enable_cameras --num_envs 16 --headless --task Drone_SAC_no_IL_V1 
-
+# Start SAC training without IL
+CUDA_VISIBLE_DEVICES=0 python /home/bavantha/Autonomous_Drone/isaac45/train_exploration.py \
+  --enable_cameras \
+  --num_envs 10 \
+  --headless \
+  --task Drone_SAC_no_IL_V1 \
+  --wandb_mode disabled

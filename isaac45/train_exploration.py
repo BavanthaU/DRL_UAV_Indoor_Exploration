@@ -5,12 +5,17 @@ Supports initialization from imitation learning (IL) and replay buffer pre-filli
 
 import argparse
 import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from isaaclab.app import AppLauncher
 
 parser = argparse.ArgumentParser(description="Train a drone for a RL task")
 parser.add_argument("--num_envs", type=int, default=10, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="Drone_SAC_IL", help="Name of the task.")
+parser.add_argument("--task", type=str, default="Drone_SAC_IL_V1", help="Name of the task.")
 parser.add_argument("--seed", type=int, default=42, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--use_IL", action="store_true", default=False, help="Use IL as pretrained weights")
@@ -75,16 +80,17 @@ class TqdmCallback(BaseCallback):
 # Import packages to use gymnasium environments
 import gymnasium as gym
 import random
-from DRL_UAV_Indoor_Exploration.isaac45.RL_drone.custom_feature_extractor import check_custom_feature_extractor_in_sb3_cfg
-import DRL_UAV_Indoor_Exploration.isaac45.utils.env_mapping_classes as env_mapping
-from DRL_UAV_Indoor_Exploration.isaac45.utils.sac import SAC
+import pickle
+from isaac45.RL_drone.custom_feature_extractor import check_custom_feature_extractor_in_sb3_cfg
+import isaac45.utils.env_mapping_classes as env_mapping
+from isaac45.utils.sac import SAC
 
 # Isaac Lab libraries
 from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
 from isaaclab.utils.dict import print_dict
-from isaaclab.utils.io import dump_yaml, dump_pickle
+from isaaclab.utils.io import dump_yaml
 from isaaclab_tasks.utils.hydra import hydra_task_config
-from DRL_UAV_Indoor_Exploration.isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
+from isaac45.utils.custom_sb3_wrapper import Sb3VecEnvWrapper, process_sb3_cfg
 
 # Stable-Baselines3 tools
 from stable_baselines3.common.callbacks import CheckpointCallback
@@ -96,6 +102,11 @@ import os
 from datetime import datetime
 import torch
 
+
+def dump_pickle(filename: str, data: object) -> None:
+    os.makedirs(os.path.dirname(filename), exist_ok=True)
+    with open(filename, "wb") as file:
+        pickle.dump(data, file)
 
 
 @hydra_task_config(args_cli.task, "sb3_cfg_entry_point")
@@ -109,7 +120,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     agent_cfg["seed"] = args_cli.seed if args_cli.seed is not None else agent_cfg["seed"]
     if args_cli.max_iterations is not None:
-        agent_cfg["n_timesteps"] = args_cli.max_iterations * agent_cfg["n_steps"] * env_cfg.scene.num_envs
+        steps_per_iteration = agent_cfg.get("n_steps", 1)
+        agent_cfg["n_timesteps"] = int(args_cli.max_iterations * steps_per_iteration * env_cfg.scene.num_envs)
 
 
     env_cfg.seed = agent_cfg["seed"]
@@ -130,28 +142,31 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
 
     # --- W&B: optional TB sync ---
     _wandb = False
-    try:
-        import wandb
-        wandb.init(
-            project=args_cli.wandb_project,
-            name=args_cli.wandb_name or f"{args_cli.task}_{run_info}",
-            mode=args_cli.wandb_mode,
-            dir=log_dir,
-            sync_tensorboard=True,   # <- mirrors SB3 TensorBoard scalars to W&B
-            resume="allow" if args_cli.resume else None,
-            config={
-                "task": args_cli.task,
-                "seed": args_cli.seed,
-                "num_envs": env_cfg.scene.num_envs,
-            },
-        )
-        _wandb = True
-        print("[INFO] W&B enabled (syncing TensorBoard).")
-    except Exception as e:
-        print(f"[WARN] W&B disabled: {e}")
+    if args_cli.wandb_mode != "disabled":
+        try:
+            import wandb
+            wandb.init(
+                project=args_cli.wandb_project,
+                name=args_cli.wandb_name or f"{args_cli.task}_{run_info}",
+                mode=args_cli.wandb_mode,
+                dir=log_dir,
+                sync_tensorboard=True,
+                resume="allow" if args_cli.resume else None,
+                config={
+                    "task": args_cli.task,
+                    "seed": args_cli.seed,
+                    "num_envs": env_cfg.scene.num_envs,
+                },
+            )
+            _wandb = True
+            print("[INFO] W&B enabled (syncing TensorBoard).")
+        except Exception as e:
+            print(f"[WARN] W&B disabled: {e}")
+    else:
+        print("[INFO] W&B disabled by command line.")
 
     # Post-process agent configuration
-    agent_cfg = process_sb3_cfg(agent_cfg)
+    agent_cfg = process_sb3_cfg(agent_cfg, env_cfg.scene.num_envs)
     agent_cfg = check_custom_feature_extractor_in_sb3_cfg(agent_cfg)
 
     # Read configurations about the agent-training
@@ -274,10 +289,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
             agent.load_replay_buffer(args_cli.buffer_path)
 
   
-    # Option to load agent from checkpoint: 
-    # checkpoint_path = "/home/desiree/Documents/Desiree/IsaacLab/logs/sb3/Drone_learn/2025-04-01_15-01-19/model_600000_steps.zip"
-    # agent = SAC.load(checkpoint_path, env, print_system_info=True, tensorboard_log=os.path.join(log_dir, f"tensorboard_runs"))
-
     # configure the logger
     new_logger = configure(log_dir, ["stdout", "tensorboard", "csv"])
     agent.set_logger(new_logger)
@@ -290,11 +301,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: dict):
     # train the agent
     remaining = max(0, int(n_timesteps) - int(start_timesteps))
     print(f"[INFO] Training for {remaining} timesteps (target total: {n_timesteps}).")
-    agent.learn(
-        total_timesteps=remaining,
-        callback=callbacks,
-        reset_num_timesteps=not bool(args_cli.resume),
-    )
+    if remaining > 0:
+        agent.learn(
+            total_timesteps=remaining,
+            callback=callbacks,
+            reset_num_timesteps=not bool(args_cli.resume),
+        )
+    else:
+        print("[INFO] No training timesteps requested; skipping agent.learn().")
 
     # save the final model
     agent.save(os.path.join(log_dir, "model"))

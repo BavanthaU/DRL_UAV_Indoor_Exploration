@@ -1,11 +1,7 @@
 import os
-import sys
 import importlib
 import inspect
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
-
-# Add project root to sys.path (one level up from this file)
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), './')))
 
 def load_custom_feature_extractors():
     """
@@ -15,14 +11,11 @@ def load_custom_feature_extractors():
     feature_extractor_map = {}
     models_dir = os.path.join(os.path.dirname(__file__), 'models')
     models_dir = os.path.abspath(models_dir)
-
-    # Add models directory to path
-    if models_dir not in sys.path:
-        sys.path.append(models_dir)
+    package_name = f"{__package__}.models"
 
     for file in os.listdir(models_dir):
         if file.endswith(".py") and not file.startswith("__"):
-            module_name = f"RL_drone.models.{file[:-3]}"
+            module_name = f"{package_name}.{file[:-3]}"
             try:
                 module = importlib.import_module(module_name)
 

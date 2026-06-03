@@ -2,7 +2,13 @@ import argparse
 import json
 import os
 import shutil
+import sys
 from datetime import datetime
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 import numpy as np
 
@@ -11,14 +17,14 @@ from torch import optim, nn
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from demo_dataset_loader import DemoDatasetLoader
+from imitation_learning.demo_dataset_loader import DemoDatasetLoader
 from gymnasium import spaces
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# from model.sac_net import SACNet
-from model.baseline_conv_sac import ILSACBaseline
+# from imitation_learning.model.sac_net import SACNet
+from imitation_learning.model.baseline_conv_sac import ILSACBaseline
 
 import torch.distributions as D
 
@@ -42,10 +48,11 @@ def parse_arguments():
     Parse command line arguments with argparse.
     Sets hyperparameters and directory paths with defaults.
     """
+    repo_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description='Argument Parser')
     parser.add_argument('--disable-cuda', action='store_true',
                         help='Disable CUDA')
-    parser.add_argument('--demo_dir', type=str, default='/workspace/isaaclab/DRL_UAV_Indoor_Exploration/trained_model_and_trajectories/expert_trajectories',
+    parser.add_argument('--demo_dir', type=str, default=str(repo_root / 'trained_model_and_trajectories' / 'expert_trajectories'),
                         help='directory of human demonstration data')
     parser.add_argument('--num_gpu', type=int, default=1,
                         help='number of gpu for rendering')
@@ -64,7 +71,8 @@ def parse_arguments():
                         help='maximum number of episodes/iterations')
     parser.add_argument('--fix_cnn', action='store_true',
                         help='fix cnn weights')
-    parser.add_argument('--save_dir', type=str, default='./occupancy_depthline_semline')
+    parser.add_argument('--save_dir', type=str, default=str(repo_root / 'outputs' / 'imitation_learning' / 'occupancy_depthline_semline'))
+    parser.add_argument('--overwrite', action='store_true', help='overwrite an existing save_dir')
     return parser.parse_args()
 
 
@@ -88,8 +96,10 @@ def main():
     # Setup directories for logs and models
     log_dir = os.path.join(args.save_dir, 'logs')
     model_dir = os.path.join(args.save_dir, 'model')
-    os.makedirs(args.save_dir, exist_ok=True)
-    shutil.rmtree(args.save_dir)
+    if os.path.isdir(args.save_dir) and os.listdir(args.save_dir):
+        if not args.overwrite:
+            raise FileExistsError(f"save_dir exists and is not empty: {args.save_dir}. Use --overwrite to replace it.")
+        shutil.rmtree(args.save_dir)
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(model_dir, exist_ok=True)
 
@@ -331,6 +341,4 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
 

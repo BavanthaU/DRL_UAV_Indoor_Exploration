@@ -28,8 +28,7 @@ policy_kwargs: "dict(
                   
 device: 'cuda:0'
 
-buffer_size: 400000  # Replay buffer size for SAC
+buffer_size: 50000  # Replay buffer size for SAC; dict/image observations make larger buffers memory-heavy
 learning_starts: 10000  # Number of steps before training starts
-
 
 

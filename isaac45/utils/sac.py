@@ -11,7 +11,7 @@ import torch as th
 import sys
 from gymnasium import spaces
 from torch.nn import functional as F
-from DRL_UAV_Indoor_Exploration.isaac45.utils.off_policy_algorithm import OffPolicyAlgorithm
+from isaac45.utils.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 

@@ -38,6 +38,9 @@ coverage.xml
 
 # Ignore ROS and simulation cache
 log/
+logs/
+outputs/
+data_storage/
 *.bag
 *.bag.active
 *.pcd
@@ -51,3 +54,6 @@ log/
 
 #logs 
 wandb/
+
+# Generated evaluation outputs
+evaluation_files/*.csv

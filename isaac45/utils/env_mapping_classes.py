@@ -25,6 +25,7 @@ import h5py
 
 from isaaclab.utils.math import matrix_from_quat, euler_xyz_from_quat
 from isaaclab.sensors.camera.utils import create_pointcloud_from_depth
+from isaac45.paths import IMAGE_DIR, ensure_dir
 
 class BasicEnvironmentModel:
     def __init__(self, num_envs: int, device:str, tf_local_to_global_world_frame: torch.Tensor):
@@ -584,7 +585,7 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
 
         # Finalize and save
         plt.tight_layout()
-        filename = '/workspace/isaac_sim_data/drone_recordings/explored_office_map/combined_figure_local_global_PC.png'
+        filename = ensure_dir(IMAGE_DIR) / "combined_figure_local_global_PC.png"
         plt.savefig(filename)
         plt.close(fig)
         
@@ -628,6 +629,5 @@ class EnvironmentModelFOVTraversability (BasicEnvironmentModel):
         self.drone_trajectory = [torch.empty((0, 2), dtype=torch.int, device=self.device) if idx_reset[idx] == 1 else traj for idx, traj in enumerate(self.drone_trajectory)]
 
         return
-
 
 
