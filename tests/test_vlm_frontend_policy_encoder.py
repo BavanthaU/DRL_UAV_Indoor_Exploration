@@ -37,8 +37,10 @@ class VlmPolicyEncoderTest(unittest.TestCase):
         out = encoder(obs)
         self.assertEqual(tuple(out.z_actor.shape), (2, 64))
         self.assertIn("prompt_similarity", out.aux)
-        self.assertEqual(out.aux["prompt_similarity"].shape[-1], 24)
+        self.assertEqual(out.aux["prompt_similarity"].shape[-1], 26)
         self.assertIn("map_embedding", out.aux)
+        self.assertIn("frontier_utility", out.aux)
+        self.assertIn("dead_end_likelihood", out.aux)
 
 
 if __name__ == "__main__":

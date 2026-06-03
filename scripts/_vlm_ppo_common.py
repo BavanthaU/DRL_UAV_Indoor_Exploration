@@ -257,7 +257,7 @@ def build_trainer(config: dict[str, Any], args: argparse.Namespace, model, log_d
     rnd = None
     rnd_beta = float(rnd_cfg.get("beta", ppo_cfg.get("rnd_beta", 0.0))) if rnd_cfg.get("enabled", False) else 0.0
     if rnd_beta > 0.0:
-        prompt_count = 12
+        prompt_count = len(model.encoder.prompt_bank)
         image_embedding_count = 2 if model.encoder.cfg.image_mode == "camera_plus_map" else 1
         rnd_input_dim = (
             model.encoder.cfg.latent_dim

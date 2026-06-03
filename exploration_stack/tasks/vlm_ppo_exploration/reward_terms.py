@@ -12,7 +12,6 @@ except ImportError:  # pragma: no cover
 class RewardWeights:
     success_threshold: float = 0.85
     w_success: float = 10.0
-    w_room_entry: float = 1.0
     w_frontier_progress: float = 0.2
     w_global_coverage_progress: float = 2.0
     w_collision: float = 10.0
@@ -42,14 +41,11 @@ def compute_extrinsic_reward(
     altitude,
     target_altitude,
     frontier_distance_delta=None,
-    new_room_transition=None,
     weights: RewardWeights | None = None,
 ):
     weights = weights or RewardWeights()
     if frontier_distance_delta is None:
         frontier_distance_delta = torch.zeros_like(coverage_ratio)
-    if new_room_transition is None:
-        new_room_transition = torch.zeros_like(coverage_ratio, dtype=torch.bool)
     success = (coverage_ratio >= weights.success_threshold).float()
     delta_coverage = (coverage_ratio - prev_coverage_ratio).clamp_min(0.0)
     near_obstacle = (float(safety_radius) - esdf_clearance).clamp_min(0.0)
@@ -57,7 +53,6 @@ def compute_extrinsic_reward(
     altitude_error = torch.abs(altitude - target_altitude)
     terms = {
         "success": weights.w_success * success,
-        "room_entry": weights.w_room_entry * new_room_transition.float(),
         "frontier_progress": weights.w_frontier_progress * frontier_distance_delta,
         "global_coverage_progress": weights.w_global_coverage_progress * delta_coverage,
         "collision": -weights.w_collision * collision.float(),
@@ -82,4 +77,3 @@ def combine_rewards(extrinsic, new_cell_reward, rnd_reward, semantic_novelty, we
     }
     total = torch.stack(list(terms.values()), dim=0).sum(dim=0)
     return total, terms
-

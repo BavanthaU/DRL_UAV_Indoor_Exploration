@@ -1,0 +1,7 @@
+{
+  "run_name": "B1_flat_vlm_ppo_baseline",
+  "method": "flat_vlm_ppo_baseline",
+  "baseline_script": "scripts/train_vlm_ppo_explorer.py",
+  "source_config": "configs/vlm_ppo_explorer/rtx4080_mobileclip_train.yaml",
+  "wandb": {"enabled": true, "project": "vlm-hierarchical-ppo-uav-exploration", "mode": "online", "group": "B1-flat", "tags": ["B1", "flat-vlm-ppo"], "log_artifacts": true, "log_config": true, "log_checkpoints": true, "log_eval": true, "log_profile": true, "log_exports": true, "log_rollouts": false}
+}

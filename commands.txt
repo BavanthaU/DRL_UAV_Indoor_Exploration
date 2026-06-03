@@ -8,31 +8,32 @@ conda activate env_isaaclab
 cd /home/bavantha/Autonomous_Drone
 python -m pip install -r requirements.txt
 
-# Test the VLM-PPO branch
+# Test the learned hierarchical VLM-PPO branch
+python -m compileall -q exploration_stack scripts tests
 python -m unittest discover -s tests
 /home/bavantha/miniconda3_aiar/envs/env_isaaclab/bin/python -m unittest discover -s tests
 
-# Debug VLM-PPO smoke training without Isaac
-python scripts/train_vlm_ppo_explorer.py \
-  --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
+# Debug hierarchical VLM-PPO smoke training without Isaac
+python scripts/train_vlm_hierarchical_ppo_explorer.py \
+  --config configs/vlm_hierarchical_ppo/debug_mock.yaml \
   --max_iterations 1 \
   --num_envs 2 \
   --wandb_mode disabled
 
-# Profile debug path
-python scripts/profile_vlm_ppo_explorer.py \
-  --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
+# Profile hierarchical debug path
+python scripts/profile_vlm_hierarchical_ppo_explorer.py \
+  --config configs/vlm_hierarchical_ppo/debug_mock.yaml \
   --num_envs 2 \
   --wandb_mode disabled
 
-# Isaac Lab VLM-PPO training with MobileCLIP frontend
+# Isaac Lab learned hierarchical VLM-PPO training with MobileCLIP frontend
 cd /home/bavantha/IsaacLab
-./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/train_vlm_ppo_explorer.py \
-  --task Isaac-VLM-PPO-UAV-Exploration-v0 \
-  --config /home/bavantha/Autonomous_Drone/configs/vlm_ppo_explorer/rtx4080_mobileclip_train.yaml \
+./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/train_vlm_hierarchical_ppo_explorer.py \
+  --task Isaac-VLM-Hierarchical-PPO-UAV-Exploration-v0 \
+  --config /home/bavantha/Autonomous_Drone/configs/vlm_hierarchical_ppo/planner_dropout_main.yaml \
   --headless \
   --enable_cameras \
   --num_envs 16 \
-  --wandb_project vlm-ppo-uav-exploration
+  --wandb_project vlm-hierarchical-ppo-uav-exploration
 
 cd /home/bavantha/Autonomous_Drone

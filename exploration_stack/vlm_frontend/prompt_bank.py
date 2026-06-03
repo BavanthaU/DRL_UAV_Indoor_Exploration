@@ -16,6 +16,7 @@ DEFAULT_EXPLORATION_PROMPTS = [
     "a room exit",
     "a dead end",
     "a safe direction for a small drone",
+    "an area that should be explored next",
 ]
 
 
@@ -47,6 +48,17 @@ class PromptBank:
     def risky_index(self) -> int:
         return self.prompts.index("a risky area close to collision")
 
+    @property
+    def repeated_index(self) -> int:
+        return self.prompts.index("a repeated or already explored area")
+
+    @property
+    def dead_end_index(self) -> int:
+        return self.prompts.index("a dead end")
+
+    @property
+    def explore_next_index(self) -> int:
+        return self.prompts.index("an area that should be explored next")
+
     def __len__(self) -> int:
         return len(self.prompts)
-

@@ -1,37 +1,56 @@
-# VLM-PPO UAV Indoor Exploration
+# Learned Hierarchical VLM-PPO UAV Indoor Exploration
 
-This branch is focused on one training path:
+This branch is focused on the learned hierarchical RL training path:
 
-`Isaac-VLM-PPO-UAV-Exploration-v0`
+`Isaac-VLM-Hierarchical-PPO-UAV-Exploration-v0`
 
-It contains the code needed to train and evaluate a PPO-based indoor
-exploration agent with:
+The method is not a classical `SLAM -> frontier planner -> A* -> local controller`
+pipeline. The main training path is:
 
-- Isaac Lab direct quadrotor environment,
-- continuous body-frame velocity and yaw-rate actions,
-- altitude-hold force/torque control,
-- VLM camera/map frontend,
-- frontier-guided subgoal features,
-- new-cell curiosity and optional RND,
-- optional offline Qwen2.5-VL teacher labels,
-- W&B experiment tracking,
-- optional C++ grid-planning acceleration with Python fallback.
+`map memory -> VLM affordance memory -> learned semantic option policy -> learned local control policy`
 
-Old baseline scripts, old checkpoints, old evaluation CSVs, and unrelated
-scaffold code have been removed from this branch. The office USD assets needed
-by the new Isaac task are kept under `assets/environments/`.
+Classical frontier and A* utilities are retained as proposal/features, dropout
+ablations, and evaluation baselines. They do not directly command the UAV in the
+main hierarchical PPO trainer.
+
+## What Is Included
+
+- Isaac Lab 2.3.2 / Isaac Sim 5.1 compatible quadrotor exploration task.
+- Separate hierarchical task package under
+  `exploration_stack/tasks/vlm_hierarchical_ppo_exploration/`.
+- Learned option set:
+  `EXPLORE_FRONTIER_CLUSTER`, `ENTER_DOORWAY`, `FOLLOW_CORRIDOR`,
+  `SWEEP_OPEN_SPACE`, `BACKTRACK_TO_UNVISITED_BRANCH`, `ROTATE_SCAN`,
+  `AVOID_AND_RECOVER`, `STOP_IF_COMPLETE`.
+- Learned continuous local action head for `[vx_body, vy_body, yaw_rate]`.
+- VLM prompt bank with exploration affordances, including
+  `"an area that should be explored next"`.
+- Planner feature modes: `none`, `features_only`, `proposal_only`,
+  `oracle_baseline`.
+- Planner dropout defaults for the main run:
+  `planner_dropout_prob=0.2`, `astar_feature_dropout_prob=0.2`,
+  `frontier_candidate_dropout_prob=0.1`.
+- Offline Qwen2.5-VL labeler for auxiliary labels only. Qwen is not called
+  during PPO rollout.
+- W&B logging for configs, metrics, checkpoints, eval/profile artifacts, and
+  optional rollout/teacher-label artifacts.
 
 ## Repository Layout
 
 - `assets/environments/` - indoor office USD assets used by the Isaac task.
-- `configs/vlm_ppo_explorer/` - debug, RTX 4080, SigLIP, and Jetson/export configs.
-- `cpp/grid_planning/` - optional pybind11 extension for grid planning utilities.
-- `exploration_stack/tasks/vlm_ppo_exploration/` - Isaac task and debug vector env.
+- `configs/vlm_hierarchical_ppo/` - B0-B8 hierarchy configs and debug smoke config.
+- `configs/vlm_ppo_explorer/` - flat VLM-PPO baseline configs.
+- `exploration_stack/hierarchy/` - candidate builder, option policy, option
+  masking, actor-critic, and option credit utilities.
+- `exploration_stack/planning/` - planner-derived features, frontier candidates,
+  and dropout.
+- `exploration_stack/rl/ppo/` - flat and hierarchical PPO trainers.
+- `exploration_stack/tasks/vlm_hierarchical_ppo_exploration/` - hierarchical task id.
+- `exploration_stack/tasks/vlm_ppo_exploration/` - flat task and CPU debug env.
 - `exploration_stack/vlm_frontend/` - MobileCLIP/SigLIP/mock VLM policy frontend.
-- `exploration_stack/rl/ppo/` - actor-critic, PPO trainer, logging, backend adapters.
 - `exploration_stack/vlm_teacher/` - offline Qwen teacher schema and labeler.
 - `scripts/` - train, eval, play, profile, rollout collection, export, and labeling.
-- `tests/` - focused tests for the VLM-PPO path.
+- `tests/` - focused tests for hierarchy, configs, frontend, planning, and smoke training.
 
 ## Setup
 
@@ -42,19 +61,13 @@ Requirements:
 - Python 3.11 conda environment for Isaac Lab
 - Project dependencies from `requirements.txt`
 
-Isaac Lab environment:
-
 ```sh
 cd /home/bavantha/IsaacLab
 git checkout v2.3.2
 ./isaaclab.sh -c env_isaaclab
 conda activate env_isaaclab
 ./isaaclab.sh -i
-```
 
-Project dependencies:
-
-```sh
 cd /home/bavantha/Autonomous_Drone
 python -m pip install -r requirements.txt
 ```
@@ -67,50 +80,38 @@ backend only for tests/smoke runs.
 ```sh
 cd /home/bavantha/Autonomous_Drone
 conda activate env_isaaclab
-python scripts/train_vlm_ppo_explorer.py \
-  --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
+python scripts/train_vlm_hierarchical_ppo_explorer.py \
+  --config configs/vlm_hierarchical_ppo/debug_mock.yaml \
   --max_iterations 1 \
   --num_envs 2 \
   --wandb_mode disabled
 ```
 
-## Isaac Lab Training
+## Main Isaac Training
 
 ```sh
 cd /home/bavantha/IsaacLab
-./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/train_vlm_ppo_explorer.py \
-  --task Isaac-VLM-PPO-UAV-Exploration-v0 \
-  --config /home/bavantha/Autonomous_Drone/configs/vlm_ppo_explorer/rtx4080_mobileclip_train.yaml \
+./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/train_vlm_hierarchical_ppo_explorer.py \
+  --task Isaac-VLM-Hierarchical-PPO-UAV-Exploration-v0 \
+  --config /home/bavantha/Autonomous_Drone/configs/vlm_hierarchical_ppo/planner_dropout_main.yaml \
   --headless \
   --enable_cameras \
   --num_envs 16 \
-  --wandb_project vlm-ppo-uav-exploration
+  --wandb_project vlm-hierarchical-ppo-uav-exploration
 ```
 
 Use `--wandb_mode disabled` for local-only runs or `--wandb_mode offline` for
-offline logging.
-
-## Evaluation
-
-```sh
-cd /home/bavantha/IsaacLab
-./isaaclab.sh -p /home/bavantha/Autonomous_Drone/scripts/eval_vlm_ppo_explorer.py \
-  --task Isaac-VLM-PPO-UAV-Exploration-v0 \
-  --config /home/bavantha/Autonomous_Drone/configs/vlm_ppo_explorer/rtx4080_mobileclip_train.yaml \
-  --checkpoint /path/to/policy_update_000001.pt \
-  --num_eval_episodes 60 \
-  --enable_cameras \
-  --record_video
-```
+offline W&B logging.
 
 ## Tests
 
 ```sh
+python -m compileall -q exploration_stack scripts tests
 python -m unittest discover -s tests
 /home/bavantha/miniconda3_aiar/envs/env_isaaclab/bin/python -m unittest discover -s tests
 ```
 
 ## Documentation
 
-See `docs/vlm_ppo_curiosity_explorer.md` for configs, W&B tracking, profiling,
-rollout collection, teacher labeling, ONNX export, and known limitations.
+See `docs/vlm_hierarchical_ppo_explorer.md` for method details, baselines,
+commands, W&B tracking, verification, and current limitations.

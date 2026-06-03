@@ -1,5 +1,10 @@
 # VLM-PPO Curiosity Explorer
 
+This document describes the retained flat VLM-PPO baseline. The current main
+branch method is the learned hierarchical variant documented in
+`docs/vlm_hierarchical_ppo_explorer.md` with task id
+`Isaac-VLM-Hierarchical-PPO-UAV-Exploration-v0`.
+
 This branch contains a standalone PPO exploration path:
 
 `Isaac-VLM-PPO-UAV-Exploration-v0`
@@ -37,8 +42,8 @@ The new task rewards map progress and safety signals:
   penalties.
 - Success when coverage reaches the configured threshold.
 
-It intentionally does not use hard-coded room IDs, fixed room-coordinate success
-regions, or doorway-coordinate rewards.
+It intentionally avoids predefined region identifiers, fixed coordinate success
+regions, and coordinate-specific doorway rewards.
 
 ## Configs
 
