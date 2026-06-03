@@ -6,7 +6,15 @@ from pathlib import Path
 
 import torch
 
-from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, make_isaac_env, parse_train_args
+from _vlm_ppo_common import (
+    build_log_dir,
+    build_model,
+    build_trainer,
+    make_debug_env,
+    make_isaac_env,
+    parse_train_args,
+    write_run_config,
+)
 
 
 def main() -> None:
@@ -16,7 +24,9 @@ def main() -> None:
     env_backend = config.get("environment", {}).get("backend", "debug")
     env = make_debug_env(config, args) if env_backend == "debug" else make_isaac_env(config, args)
     model = build_model(config, action_dim=3)
-    trainer, _ = build_trainer(config, args, model, build_log_dir(config, args))
+    log_dir = build_log_dir(config, args)
+    trainer, _ = build_trainer(config, args, model, log_dir)
+    write_run_config(trainer, config)
     trainer.load(args.checkpoint)
     obs = trainer._to_device(env.reset())
     episode_returns = torch.zeros(env.num_envs, device=trainer.device)
@@ -48,7 +58,11 @@ def main() -> None:
     }
     output_dir = Path(args.output_dir or build_log_dir(config, args))
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "eval_metrics.json").write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
+    metrics_path = output_dir / "eval_metrics.json"
+    metrics_path.write_text(json.dumps(metrics, indent=2, sort_keys=True), encoding="utf-8")
+    trainer.logger.log(0, {f"eval/{key}": value for key, value in metrics.items()})
+    trainer.logger.log_artifact(metrics_path, artifact_type="eval", enabled_key="log_eval", aliases=["latest"])
+    trainer.logger.finish()
     print(json.dumps(metrics, indent=2, sort_keys=True))
     if hasattr(env, "close"):
         env.close()

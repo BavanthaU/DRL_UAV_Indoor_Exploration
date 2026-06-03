@@ -55,5 +55,18 @@
     "rnd": {"enabled": true, "beta": 0.05, "hidden_dim": 64, "output_dim": 32, "learning_rate": 0.0001, "reward_clip": 5.0},
     "semantic_novelty": {"beta": 0.02}
   },
+  "wandb": {
+    "enabled": false,
+    "project": "vlm-ppo-uav-exploration",
+    "mode": "disabled",
+    "tags": ["debug", "mock-vlm"],
+    "log_artifacts": true,
+    "log_config": true,
+    "log_checkpoints": true,
+    "log_eval": true,
+    "log_profile": true,
+    "log_exports": true,
+    "log_rollouts": false
+  },
   "logging": {"root": "logs/vlm_ppo_explorer"}
 }

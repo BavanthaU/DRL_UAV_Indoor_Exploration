@@ -100,6 +100,10 @@ curiosity, optional RND, and structured logging. It is independent from the old
 IL/SAC configs and uses the existing indoor office USD assets for the Isaac
 task.
 
+The RTX and Jetson configs upload key metrics and artifacts to W&B project
+`vlm-ppo-uav-exploration` by default. Use `--wandb_mode disabled` for a local
+run, or `--wandb_mode offline` when training without network access.
+
 Debug smoke run:
 ```sh
 conda activate env_isaaclab
@@ -117,7 +121,8 @@ cd /home/bavantha/IsaacLab
   --config /home/bavantha/Autonomous_Drone/configs/vlm_ppo_explorer/rtx4080_mobileclip_train.yaml \
   --headless \
   --enable_cameras \
-  --num_envs 16
+  --num_envs 16 \
+  --wandb_project vlm-ppo-uav-exploration
 ```
 
 See `docs/vlm_ppo_curiosity_explorer.md` for architecture, configs, profiling,

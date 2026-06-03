@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, make_isaac_env, parse_train_args
+from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, make_isaac_env, parse_train_args, write_run_config
 
 
 def main() -> None:
@@ -13,12 +13,14 @@ def main() -> None:
     env_backend = config.get("environment", {}).get("backend", "debug")
     env = make_debug_env(config, args) if env_backend == "debug" else make_isaac_env(config, args)
     model = build_model(config, action_dim=3)
-    trainer, _ = build_trainer(config, args, model, build_log_dir(config, args))
+    log_dir = build_log_dir(config, args)
+    trainer, _ = build_trainer(config, args, model, log_dir)
+    write_run_config(trainer, config)
     if args.checkpoint:
         trainer.load(args.checkpoint)
     obs = trainer._to_device(env.reset())
     steps = args.steps or int(config.get("rollout_collection", {}).get("steps", 128))
-    output_dir = Path(args.output_dir or build_log_dir(config, args) / "rollouts")
+    output_dir = Path(args.output_dir or log_dir / "rollouts")
     output_dir.mkdir(parents=True, exist_ok=True)
     frames = []
     for _ in range(steps):
@@ -42,6 +44,9 @@ def main() -> None:
         obs = trainer._to_device(next_obs)
     output_path = output_dir / "rollout.pt"
     torch.save({"frames": frames, "config": config}, output_path)
+    trainer.logger.log(0, {"rollout/steps": steps, "rollout/num_envs": env.num_envs})
+    trainer.logger.log_artifact(output_path, artifact_type="rollout", enabled_key="log_rollouts", aliases=["latest"])
+    trainer.logger.finish()
     print(f"[INFO] Saved rollout cache: {output_path}")
     if hasattr(env, "close"):
         env.close()

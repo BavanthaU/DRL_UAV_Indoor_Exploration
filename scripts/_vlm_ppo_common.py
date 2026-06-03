@@ -52,6 +52,11 @@ def add_common_args(parser: argparse.ArgumentParser, *, include_device: bool = T
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--record_video", action="store_true", default=False)
+    parser.add_argument("--wandb_mode", type=str, default=None, choices=["online", "offline", "disabled"])
+    parser.add_argument("--wandb_project", type=str, default=None)
+    parser.add_argument("--wandb_entity", type=str, default=None)
+    parser.add_argument("--wandb_name", type=str, default=None)
+    parser.add_argument("--wandb_group", type=str, default=None)
     if include_device:
         parser.add_argument("--device", type=str, default=None)
 
@@ -89,6 +94,37 @@ def build_log_dir(config: dict[str, Any], args: argparse.Namespace) -> Path:
     name = args.run_id or run_id(config.get("run_name"))
     root = Path(config.get("logging", {}).get("root", "logs/vlm_ppo_explorer"))
     return REPO_ROOT / root / name
+
+
+def resolve_wandb_config(config: dict[str, Any], args: argparse.Namespace, log_dir: Path) -> dict[str, Any]:
+    wandb_cfg = dict(config.get("wandb", {}))
+    mode = getattr(args, "wandb_mode", None)
+    if mode is not None:
+        wandb_cfg["mode"] = mode
+        wandb_cfg["enabled"] = mode != "disabled"
+    for attr, key in (
+        ("wandb_project", "project"),
+        ("wandb_entity", "entity"),
+        ("wandb_name", "name"),
+        ("wandb_group", "group"),
+    ):
+        value = getattr(args, attr, None)
+        if value is not None:
+            wandb_cfg[key] = value
+    if "name" not in wandb_cfg or wandb_cfg["name"] in (None, ""):
+        wandb_cfg["name"] = log_dir.name
+    if "project" not in wandb_cfg or wandb_cfg["project"] in (None, ""):
+        wandb_cfg["project"] = "vlm-ppo-uav-exploration"
+    wandb_cfg.setdefault("mode", "online")
+    wandb_cfg.setdefault("enabled", False)
+    wandb_cfg.setdefault("log_artifacts", True)
+    wandb_cfg.setdefault("log_config", True)
+    wandb_cfg.setdefault("log_checkpoints", True)
+    wandb_cfg.setdefault("log_eval", True)
+    wandb_cfg.setdefault("log_profile", True)
+    wandb_cfg.setdefault("log_exports", True)
+    wandb_cfg.setdefault("log_rollouts", False)
+    return wandb_cfg
 
 
 def make_debug_env(config: dict[str, Any], args: argparse.Namespace):
@@ -213,6 +249,7 @@ def build_trainer(config: dict[str, Any], args: argparse.Namespace, model, log_d
     from exploration_stack.tasks.vlm_ppo_exploration.rnd import RNDConfig, RNDIntrinsicReward
 
     ppo_cfg = config.get("ppo", {})
+    wandb_config = resolve_wandb_config(config, args, log_dir)
     backend = args.ppo_backend or ppo_cfg.get("backend", "torch_reference")
     max_iterations = args.max_iterations if args.max_iterations is not None else int(ppo_cfg.get("max_iterations", 1))
     device = getattr(args, "device", None) or config.get("device") or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -256,7 +293,7 @@ def build_trainer(config: dict[str, Any], args: argparse.Namespace, model, log_d
         log_dir=str(log_dir),
     )
     if backend == "torch_reference":
-        return TorchPPOTrainerAdapter(model, torch_cfg, device=device, rnd=rnd), max_iterations
+        return TorchPPOTrainerAdapter(model, torch_cfg, device=device, rnd=rnd, wandb_config=wandb_config), max_iterations
     if backend == "skrl":
         return SkrlPPOTrainerAdapter(model, torch_cfg, device=device), max_iterations
     if backend == "rsl_rl":

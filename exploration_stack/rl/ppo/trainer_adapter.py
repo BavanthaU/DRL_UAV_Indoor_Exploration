@@ -39,14 +39,22 @@ class TorchPPOConfig:
 class TorchPPOTrainerAdapter(TrainerAdapter):
     """Reference PPO trainer for custom VLM actor-critic integration."""
 
-    def __init__(self, model: VLMActorCritic, cfg: TorchPPOConfig, *, device: str = "cpu", rnd=None):
+    def __init__(
+        self,
+        model: VLMActorCritic,
+        cfg: TorchPPOConfig,
+        *,
+        device: str = "cpu",
+        rnd=None,
+        wandb_config: dict | None = None,
+    ):
         if torch is None:
             raise RuntimeError("TorchPPOTrainerAdapter requires PyTorch.")
         self.model = model.to(device)
         self.cfg = cfg
         self.device = torch.device(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=cfg.learning_rate)
-        self.logger = StructuredRunLogger(cfg.log_dir)
+        self.logger = StructuredRunLogger(cfg.log_dir, wandb_config=wandb_config)
         self.reward_normalizer = RewardNormalizer().to(self.device) if cfg.normalize_rewards else None
         self.rnd = rnd.to(self.device) if rnd is not None else None
 
@@ -59,6 +67,7 @@ class TorchPPOTrainerAdapter(TrainerAdapter):
             obs = rollout["next_obs"]
             total_timesteps += rollout["actions"].shape[0] * rollout["actions"].shape[1]
             metrics = self._update(rollout)
+            metrics["timesteps"] = total_timesteps
             reward_terms = rollout.get("reward_terms", {})
             for key, value in reward_terms.items():
                 metrics[f"reward/{key}"] = float(value)
@@ -196,6 +205,13 @@ class TorchPPOTrainerAdapter(TrainerAdapter):
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         torch.save({"model": self.model.state_dict(), "optimizer": self.optimizer.state_dict(), "cfg": self.cfg}, output)
+        self.logger.log_artifact(
+            output,
+            artifact_type="model",
+            aliases=["latest"],
+            enabled_key="log_checkpoints",
+            metadata={"checkpoint_path": str(output)},
+        )
 
     def load(self, path: str) -> None:
         checkpoint = torch.load(path, map_location=self.device)

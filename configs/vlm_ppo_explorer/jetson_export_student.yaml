@@ -55,5 +55,18 @@
     "rnd": {"enabled": false, "beta": 0.0},
     "semantic_novelty": {"beta": 0.02}
   },
+  "wandb": {
+    "enabled": true,
+    "project": "vlm-ppo-uav-exploration",
+    "mode": "online",
+    "tags": ["jetson", "student-export"],
+    "log_artifacts": true,
+    "log_config": true,
+    "log_checkpoints": true,
+    "log_eval": true,
+    "log_profile": true,
+    "log_exports": true,
+    "log_rollouts": false
+  },
   "logging": {"root": "logs/vlm_ppo_explorer"}
 }

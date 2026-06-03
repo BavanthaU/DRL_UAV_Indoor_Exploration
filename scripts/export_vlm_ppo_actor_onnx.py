@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, parse_train_args
+from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, parse_train_args, write_run_config
 
 
 class ActorOnnxWrapper(torch.nn.Module):
@@ -30,12 +30,14 @@ def main() -> None:
     args, config, _ = parse_train_args()
     env = make_debug_env(config, args)
     model = build_model(config, action_dim=3)
-    trainer, _ = build_trainer(config, args, model, build_log_dir(config, args))
+    log_dir = build_log_dir(config, args)
+    trainer, _ = build_trainer(config, args, model, log_dir)
+    write_run_config(trainer, config)
     if args.checkpoint:
         trainer.load(args.checkpoint)
     obs = trainer._to_device(env.reset())
     wrapper = ActorOnnxWrapper(trainer.model).eval()
-    output_dir = Path(args.output_dir or build_log_dir(config, args) / "exports")
+    output_dir = Path(args.output_dir or log_dir / "exports")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "vlm_ppo_actor.onnx"
     keys = ["camera_rgb", "map_crop", "frontier_mask", "trajectory_mask", "depth_line", "semantic_line", "subgoal_features"]
@@ -51,6 +53,8 @@ def main() -> None:
         dynamic_axes={name: {0: "batch"} for name in [*keys, "action_mean"]},
         opset_version=17,
     )
+    trainer.logger.log_artifact(output_path, artifact_type="onnx", enabled_key="log_exports", aliases=["latest"])
+    trainer.logger.finish()
     print(f"[INFO] Exported ONNX actor: {output_path}")
 
 

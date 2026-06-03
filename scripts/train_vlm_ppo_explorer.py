@@ -29,6 +29,7 @@ def main() -> None:
     trainer.save(str(checkpoint_path))
     print(f"[INFO] VLM-PPO training finished: updates={result.updates} timesteps={result.timesteps}")
     print(f"[INFO] Checkpoint saved: {checkpoint_path}")
+    trainer.logger.finish()
     if hasattr(env, "close"):
         env.close()
     if simulation_app is not None:

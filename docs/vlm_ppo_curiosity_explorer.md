@@ -137,6 +137,57 @@ Each run stores:
 
 The directory is ignored by git.
 
+## W&B Tracking
+
+The RTX and Jetson configs enable W&B uploads by default under project:
+
+`vlm-ppo-uav-exploration`
+
+Uploaded items:
+
+- scalar PPO metrics and reward terms,
+- config plus git commit,
+- checkpoints as model artifacts,
+- evaluation JSON as eval artifacts,
+- profile JSON as profile artifacts,
+- ONNX exports as artifacts,
+- teacher label JSONL when `scripts/label_vlm_affordances_qwen.py` is run with W&B enabled.
+
+Rollout cache upload is disabled by default because caches can become large.
+Enable it by setting:
+
+```json
+"wandb": {
+  "log_rollouts": true
+}
+```
+
+Disable W&B for a run:
+
+```sh
+python scripts/train_vlm_ppo_explorer.py \
+  --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
+  --wandb_mode disabled
+```
+
+Run in offline mode:
+
+```sh
+python scripts/train_vlm_ppo_explorer.py \
+  --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
+  --wandb_mode offline
+```
+
+Override project/entity/name:
+
+```sh
+python scripts/train_vlm_ppo_explorer.py \
+  --config configs/vlm_ppo_explorer/rtx4080_mobileclip_train.yaml \
+  --wandb_project vlm-ppo-uav-exploration \
+  --wandb_entity <entity> \
+  --wandb_name <run-name>
+```
+
 ## Verification Run
 
 Commands run during implementation:

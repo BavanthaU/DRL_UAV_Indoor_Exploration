@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, parse_train_args
+from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, parse_train_args, write_run_config
 
 
 class PolicyOnnxWrapper(torch.nn.Module):
@@ -33,12 +33,14 @@ def main() -> None:
         raise SystemExit("ONNX export uses a local dummy observation. Use the debug or student export config.")
     env = make_debug_env(config, args)
     model = build_model(config, action_dim=3)
-    trainer, _ = build_trainer(config, args, model, build_log_dir(config, args))
+    log_dir = build_log_dir(config, args)
+    trainer, _ = build_trainer(config, args, model, log_dir)
+    write_run_config(trainer, config)
     if args.checkpoint:
         trainer.load(args.checkpoint)
     obs = trainer._to_device(env.reset())
     wrapper = PolicyOnnxWrapper(trainer.model).eval()
-    output_dir = Path(args.output_dir or build_log_dir(config, args) / "exports")
+    output_dir = Path(args.output_dir or log_dir / "exports")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / "vlm_ppo_policy.onnx"
     inputs = tuple(obs[key] for key in ["camera_rgb", "map_crop", "frontier_mask", "trajectory_mask", "depth_line", "semantic_line", "subgoal_features"])
@@ -53,6 +55,8 @@ def main() -> None:
         dynamic_axes={name: {0: "batch"} for name in ["camera_rgb", "map_crop", "frontier_mask", "trajectory_mask", "depth_line", "semantic_line", "subgoal_features", "action_mean", "value"]},
         opset_version=17,
     )
+    trainer.logger.log_artifact(output_path, artifact_type="onnx", enabled_key="log_exports", aliases=["latest"])
+    trainer.logger.finish()
     print(f"[INFO] Exported ONNX policy: {output_path}")
 
 

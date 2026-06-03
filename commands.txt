@@ -16,7 +16,8 @@ python -m unittest discover -s tests
 python scripts/train_vlm_ppo_explorer.py \
   --config configs/vlm_ppo_explorer/debug_mock_train.yaml \
   --max_iterations 1 \
-  --num_envs 2
+  --num_envs 2 \
+  --wandb_mode disabled
 
 # New VLM-PPO Isaac Lab training with MobileCLIP frontend
 cd /home/bavantha/IsaacLab
@@ -25,7 +26,8 @@ cd /home/bavantha/IsaacLab
   --config /home/bavantha/Autonomous_Drone/configs/vlm_ppo_explorer/rtx4080_mobileclip_train.yaml \
   --headless \
   --enable_cameras \
-  --num_envs 16
+  --num_envs 16 \
+  --wandb_project vlm-ppo-uav-exploration
 
 cd /home/bavantha/Autonomous_Drone
 

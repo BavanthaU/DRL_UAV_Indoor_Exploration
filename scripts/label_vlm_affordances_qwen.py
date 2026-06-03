@@ -35,6 +35,10 @@ def main() -> None:
     parser.add_argument("--model", default="Qwen/Qwen2.5-VL-7B-Instruct")
     parser.add_argument("--fallback_model", default="Qwen/Qwen2.5-VL-3B-Instruct")
     parser.add_argument("--max_frames", type=int, default=None)
+    parser.add_argument("--wandb_mode", choices=["online", "offline", "disabled"], default="disabled")
+    parser.add_argument("--wandb_project", default="vlm-ppo-uav-exploration")
+    parser.add_argument("--wandb_entity", default=None)
+    parser.add_argument("--wandb_name", default=None)
     args = parser.parse_args()
 
     rollout = torch.load(args.rollout, map_location="cpu")
@@ -48,6 +52,22 @@ def main() -> None:
             image = _tensor_to_pil(frame["obs"]["camera_rgb"])
             label = teacher.label_image(image, prompt)
             file.write(json.dumps({"frame_id": frame_id, "label": label.__dict__}, sort_keys=True) + "\n")
+    if args.wandb_mode != "disabled":
+        try:
+            import wandb
+        except ImportError as exc:
+            raise RuntimeError("Install wandb or use --wandb_mode disabled.") from exc
+        run = wandb.init(
+            project=args.wandb_project,
+            entity=args.wandb_entity,
+            name=args.wandb_name or output.stem,
+            mode=args.wandb_mode,
+            config={"rollout": args.rollout, "model": args.model, "fallback_model": args.fallback_model},
+        )
+        artifact = wandb.Artifact(f"{output.stem}-teacher-labels", type="teacher-labels")
+        artifact.add_file(str(output))
+        run.log_artifact(artifact, aliases=["latest"])
+        run.finish()
     print(f"[INFO] Saved Qwen affordance labels: {output}")
 
 

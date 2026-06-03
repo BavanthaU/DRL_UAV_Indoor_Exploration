@@ -6,7 +6,9 @@ import time
 
 import torch
 
-from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, make_isaac_env, parse_train_args
+from pathlib import Path
+
+from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, make_isaac_env, parse_train_args, write_run_config
 from exploration_stack.cpp_accel import grid_planning
 
 
@@ -24,7 +26,9 @@ def main() -> None:
     env_backend = config.get("environment", {}).get("backend", "debug")
     env = make_debug_env(config, args) if env_backend == "debug" else make_isaac_env(config, args)
     model = build_model(config, action_dim=3)
-    trainer, _ = build_trainer(config, args, model, build_log_dir(config, args))
+    log_dir = build_log_dir(config, args)
+    trainer, _ = build_trainer(config, args, model, log_dir)
+    write_run_config(trainer, config)
     obs = trainer._to_device(env.reset())
     sample_grid = [[1] * 32 for _ in range(32)]
     for idx in range(4, 28):
@@ -60,6 +64,13 @@ def main() -> None:
         "achieved_policy_hz": 1000.0 / max(policy_ms, 1.0e-6),
         "achieved_map_hz": 1000.0 / max(step_ms, 1.0e-6),
     }
+    output_dir = Path(args.output_dir or log_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    profile_path = output_dir / "profile_metrics.json"
+    profile_path.write_text(json.dumps(profile, indent=2, sort_keys=True), encoding="utf-8")
+    trainer.logger.log(0, {f"profile/{key}": value for key, value in profile.items() if value is not None})
+    trainer.logger.log_artifact(profile_path, artifact_type="profile", enabled_key="log_profile", aliases=["latest"])
+    trainer.logger.finish()
     print(json.dumps(profile, indent=2, sort_keys=True))
     if hasattr(env, "close"):
         env.close()

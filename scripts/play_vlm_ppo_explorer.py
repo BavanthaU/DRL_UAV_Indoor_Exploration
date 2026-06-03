@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import torch
 
-from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, make_isaac_env, parse_train_args
+from _vlm_ppo_common import build_log_dir, build_model, build_trainer, make_debug_env, make_isaac_env, parse_train_args, write_run_config
 
 
 def main() -> None:
@@ -12,6 +12,7 @@ def main() -> None:
     env = make_debug_env(config, args) if env_backend == "debug" else make_isaac_env(config, args)
     model = build_model(config, action_dim=3)
     trainer, _ = build_trainer(config, args, model, build_log_dir(config, args))
+    write_run_config(trainer, config)
     if args.checkpoint:
         trainer.load(args.checkpoint)
     obs = trainer._to_device(env.reset())
@@ -26,6 +27,8 @@ def main() -> None:
         if trainer._as_tensor(done).bool().any():
             break
     print(f"[INFO] Play finished after {step + 1} steps. Mean return={returns.mean().item():.3f}")
+    trainer.logger.log(0, {"play/steps": step + 1, "play/mean_return": float(returns.mean().detach().cpu())})
+    trainer.logger.finish()
     if hasattr(env, "close"):
         env.close()
     if simulation_app is not None:
