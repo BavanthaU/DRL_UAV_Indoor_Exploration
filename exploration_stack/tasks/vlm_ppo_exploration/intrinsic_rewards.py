@@ -33,16 +33,38 @@ class NewCellCountCuriosity:
         else:
             self.visited[env_ids] = False
 
+    def prime(self, occupancy_grid, env_ids=None):
+        """Mark already-observed free cells as seen without granting reward."""
+
+        free = self._free_mask(occupancy_grid)
+        if env_ids is None:
+            if free.shape[0] != self.num_envs:
+                raise ValueError("occupancy_grid batch size must match num_envs when env_ids is not provided")
+            self.visited[:] = free
+            return
+        ids = torch.as_tensor(env_ids, dtype=torch.long, device=self.device)
+        if free.shape[0] == self.num_envs:
+            self.visited[ids] = free[ids]
+        elif free.shape[0] == ids.numel():
+            self.visited[ids] = free
+        else:
+            raise ValueError("occupancy_grid batch size must match num_envs or len(env_ids)")
+
     def update(self, occupancy_grid):
-        if occupancy_grid.ndim != 3:
-            raise ValueError("occupancy_grid must be [B,H,W]")
-        free = occupancy_grid.to(self.device) == self.cfg.free_value
+        free = self._free_mask(occupancy_grid)
+        if free.shape[0] != self.num_envs:
+            raise ValueError("occupancy_grid batch size must match num_envs")
         newly_observed = free & ~self.visited
         new_counts = newly_observed.flatten(start_dim=1).sum(dim=1).float()
         self.visited |= free
         denom = float(max(1, self.cfg.max_new_cells_per_step)) ** 0.5
         reward = torch.sqrt(new_counts.clamp_min(0.0)) / denom
         return reward.clamp(0.0, 1.0), new_counts
+
+    def _free_mask(self, occupancy_grid):
+        if occupancy_grid.ndim != 3:
+            raise ValueError("occupancy_grid must be [B,H,W]")
+        return occupancy_grid.to(self.device) == self.cfg.free_value
 
 
 class SemanticNovelty:
@@ -72,4 +94,3 @@ class SemanticNovelty:
             self.counts[env_id][key] = count
             rewards.append(1.0 / (count**0.5))
         return torch.tensor(rewards, dtype=torch.float32, device=prompt_similarity.device)
-

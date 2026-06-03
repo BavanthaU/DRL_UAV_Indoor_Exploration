@@ -34,8 +34,10 @@ class VlmPpoActionCfg:
     kp_xy_velocity: float = 1.8
     kp_z: float = 9.0
     kd_z: float = 4.0
-    kp_yaw_rate: float = 0.02
-    angular_damping: float = 0.003
+    kp_yaw_rate: float = 0.001
+    angular_damping: float = 0.0002
+    max_roll_pitch_torque_nm: float = 0.003
+    max_yaw_torque_nm: float = 0.003
 
 
 @configclass

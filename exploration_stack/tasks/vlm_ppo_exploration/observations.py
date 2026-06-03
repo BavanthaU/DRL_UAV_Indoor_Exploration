@@ -34,13 +34,12 @@ def frontier_mask_from_visited(visited):
     return frontier
 
 
-def depth_line_from_camera(depth_image, width: int = 64):
+def depth_line_from_camera(depth_image, width: int = 64, max_depth_m: float = 6.0):
     if depth_image is None:
         return None
     if depth_image.ndim == 4:
         depth_image = depth_image.squeeze(-1)
     row = depth_image[:, depth_image.shape[1] // 2, :]
-    row = torch.nan_to_num(row, nan=0.0, posinf=0.0, neginf=0.0)
+    row = torch.nan_to_num(row, nan=max_depth_m, posinf=max_depth_m, neginf=0.0)
     row = torch.nn.functional.interpolate(row.unsqueeze(1), size=width, mode="linear", align_corners=False).squeeze(1)
-    return row.clamp(0.0, 6.0) / 6.0
-
+    return row.clamp(0.0, max_depth_m) / max_depth_m

@@ -91,6 +91,12 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
                 "return_home_phase",
                 "home_distance",
                 "invalid_state",
+                "invalid_nonfinite",
+                "invalid_quaternion",
+                "invalid_map_bounds",
+                "invalid_altitude",
+                "invalid_linear_speed",
+                "invalid_angular_speed",
             ]
         }
 
@@ -146,9 +152,17 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         self._thrust[:, 0, 2] = z_force.clamp(0.0, 2.5 * self._robot_weight)
         yaw_rate_cmd = self._actions[:, 2] * self.cfg.action_cfg.max_yaw_rate_radps
         yaw_rate_error = yaw_rate_cmd - root_ang_vel_w[:, 2]
-        self._moment[:, 0, 0] = -self.cfg.action_cfg.angular_damping * root_ang_vel_w[:, 0]
-        self._moment[:, 0, 1] = -self.cfg.action_cfg.angular_damping * root_ang_vel_w[:, 1]
-        self._moment[:, 0, 2] = self.cfg.action_cfg.kp_yaw_rate * yaw_rate_error
+        max_rp_torque = float(self.cfg.action_cfg.max_roll_pitch_torque_nm)
+        max_yaw_torque = float(self.cfg.action_cfg.max_yaw_torque_nm)
+        self._moment[:, 0, 0] = (-self.cfg.action_cfg.angular_damping * root_ang_vel_w[:, 0]).clamp(
+            -max_rp_torque, max_rp_torque
+        )
+        self._moment[:, 0, 1] = (-self.cfg.action_cfg.angular_damping * root_ang_vel_w[:, 1]).clamp(
+            -max_rp_torque, max_rp_torque
+        )
+        self._moment[:, 0, 2] = (self.cfg.action_cfg.kp_yaw_rate * yaw_rate_error).clamp(
+            -max_yaw_torque, max_yaw_torque
+        )
 
     def _apply_action(self):
         self._robot.permanent_wrench_composer.set_forces_and_torques(
@@ -182,10 +196,16 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
-        invalid_state = self._invalid_state_mask()
+        invalid_terms = self._invalid_state_terms()
+        invalid_state = self._combine_invalid_terms(invalid_terms)
         root_pos_w = self._safe_root_pos_w()
         occupancy = self._visited.to(torch.long)
         new_cell_reward, new_counts = self._new_cell_curiosity.update(occupancy)
+        self._stuck_counter = torch.where(
+            (new_counts > 0) | invalid_state,
+            torch.zeros_like(self._stuck_counter),
+            self._stuck_counter + 1,
+        )
         semantic_novelty = torch.zeros_like(new_cell_reward)
         rnd_reward = torch.zeros_like(new_cell_reward)
         collision = invalid_state
@@ -253,6 +273,7 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
             "return_home_phase": return_home.float(),
             "home_distance": home_distance,
             "invalid_state": invalid_state.float(),
+            **{key: value.float() for key, value in invalid_terms.items()},
         }
         for key, value in all_terms.items():
             value = torch.nan_to_num(value.float(), nan=0.0, posinf=0.0, neginf=0.0)
@@ -313,12 +334,21 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         self._robot.write_root_pose_to_sim(root_state[:, :7], env_ids)
         self._robot.write_root_velocity_to_sim(torch.zeros_like(root_state[:, 7:]), env_ids)
         self._robot.write_joint_state_to_sim(joint_pos, joint_vel, None, env_ids)
+        self._update_map_memory(env_ids=env_ids)
+        self._prev_mapped_free_cells[env_ids] = self._mapped_free_cells[env_ids]
+        self._new_cell_curiosity.prime(self._visited, env_ids)
+        self._stuck_counter[env_ids] = 0
 
-    def _update_map_memory(self):
+    def _update_map_memory(self, env_ids: torch.Tensor | None = None):
+        if env_ids is None:
+            ids = torch.arange(self.num_envs, device=self.device)
+        elif isinstance(env_ids, torch.Tensor):
+            ids = env_ids.to(self.device).long()
+        else:
+            ids = torch.tensor(env_ids, dtype=torch.long, device=self.device)
         centers = self._world_to_grid(self._safe_root_pos_w()[:, :2])
         radius = self.cfg.map_cfg.sensor_radius_cells
-        old_counts = self._visited.flatten(start_dim=1).sum(dim=1)
-        for env_id in range(self.num_envs):
+        for env_id in ids.tolist():
             row = int(centers[env_id, 0].item())
             col = int(centers[env_id, 1].item())
             row0, row1 = max(0, row - radius), min(self.cfg.map_cfg.grid_size, row + radius + 1)
@@ -327,7 +357,6 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
             self._trajectory[env_id, row, col] = True
         new_counts = self._visited.flatten(start_dim=1).sum(dim=1)
         self._mapped_free_cells = new_counts.float()
-        self._stuck_counter = torch.where(new_counts > old_counts, torch.zeros_like(self._stuck_counter), self._stuck_counter + 1)
 
     def _world_to_grid(self, xy_w):
         xy_w = torch.where(torch.isfinite(xy_w), xy_w, self._terrain.env_origins[:, :2])
@@ -379,15 +408,49 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
             values[env_ids] = 0.0
 
     def _invalid_state_mask(self):
-        tensors = [
-            self._robot.data.root_pos_w,
-            self._robot.data.root_quat_w,
-            self._robot.data.root_lin_vel_w,
-            self._robot.data.root_ang_vel_w,
-        ]
-        invalid = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        return self._combine_invalid_terms(self._invalid_state_terms())
+
+    def _invalid_state_terms(self):
+        root_pos_w = self._robot.data.root_pos_w
+        root_quat_w = self._robot.data.root_quat_w
+        root_lin_vel_w = self._robot.data.root_lin_vel_w
+        root_ang_vel_w = self._robot.data.root_ang_vel_w
+        tensors = [root_pos_w, root_quat_w, root_lin_vel_w, root_ang_vel_w]
+        invalid_nonfinite = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
         for tensor in tensors:
-            invalid |= ~torch.isfinite(tensor).all(dim=-1)
+            invalid_nonfinite |= ~torch.isfinite(tensor).all(dim=-1)
+        quat_norm = torch.linalg.norm(torch.nan_to_num(root_quat_w, nan=0.0, posinf=0.0, neginf=0.0), dim=-1)
+        invalid_quaternion = quat_norm <= 1.0e-6
+        finite_pos = torch.isfinite(root_pos_w).all(dim=-1)
+        local_xy = torch.linalg.norm(
+            torch.nan_to_num(root_pos_w[:, :2] - self._terrain.env_origins[:, :2], nan=0.0, posinf=0.0, neginf=0.0),
+            dim=-1,
+        )
+        altitude = root_pos_w[:, 2]
+        invalid_map_bounds = finite_pos & (local_xy > self._map_radius_limit_m())
+        invalid_altitude = torch.isfinite(altitude) & (
+            (altitude < self.cfg.action_cfg.min_altitude_m) | (altitude > self.cfg.action_cfg.max_altitude_m)
+        )
+        finite_lin_vel = torch.isfinite(root_lin_vel_w).all(dim=-1)
+        finite_ang_vel = torch.isfinite(root_ang_vel_w).all(dim=-1)
+        lin_speed = torch.linalg.norm(torch.nan_to_num(root_lin_vel_w, nan=0.0, posinf=0.0, neginf=0.0), dim=-1)
+        ang_speed = torch.linalg.norm(torch.nan_to_num(root_ang_vel_w, nan=0.0, posinf=0.0, neginf=0.0), dim=-1)
+        invalid_linear_speed = finite_lin_vel & (lin_speed > 20.0)
+        invalid_angular_speed = finite_ang_vel & (ang_speed > 100.0)
+        return {
+            "invalid_nonfinite": invalid_nonfinite,
+            "invalid_quaternion": invalid_quaternion,
+            "invalid_map_bounds": invalid_map_bounds,
+            "invalid_altitude": invalid_altitude,
+            "invalid_linear_speed": invalid_linear_speed,
+            "invalid_angular_speed": invalid_angular_speed,
+        }
+
+    @staticmethod
+    def _combine_invalid_terms(invalid_terms):
+        invalid = None
+        for value in invalid_terms.values():
+            invalid = value.clone() if invalid is None else invalid | value
         return invalid
 
     def _safe_root_pos_w(self):
@@ -395,7 +458,8 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         fallback = torch.zeros_like(root_pos_w)
         fallback[:, :2] = self._home_xy_w
         fallback[:, 2] = self.cfg.action_cfg.target_altitude_m
-        return torch.where(torch.isfinite(root_pos_w), root_pos_w, fallback)
+        finite_root = torch.where(torch.isfinite(root_pos_w), root_pos_w, fallback)
+        return torch.where(self._unsafe_pose_mask(root_pos_w).unsqueeze(-1), fallback, finite_root)
 
     def _safe_root_quat_w(self):
         quat = torch.nan_to_num(self._robot.data.root_quat_w, nan=0.0, posinf=0.0, neginf=0.0)
@@ -405,3 +469,15 @@ class IsaacVlmPpoUavExplorationEnv(DirectRLEnv):
         invalid = norm.squeeze(-1) <= 1e-6
         quat = torch.where(invalid.unsqueeze(-1), identity, quat / norm.clamp_min(1e-6))
         return quat
+
+    def _unsafe_pose_mask(self, root_pos_w):
+        finite_pose = torch.isfinite(root_pos_w).all(dim=-1)
+        sanitized = torch.nan_to_num(root_pos_w, nan=0.0, posinf=0.0, neginf=0.0)
+        local_xy = torch.linalg.norm(sanitized[:, :2] - self._terrain.env_origins[:, :2], dim=-1)
+        max_z = max(10.0, float(self.cfg.action_cfg.max_altitude_m) * 4.0)
+        return (~finite_pose) | (local_xy > self._map_radius_limit_m() * 4.0) | (sanitized[:, 2].abs() > max_z)
+
+    def _map_radius_limit_m(self):
+        half_width = 0.5 * float(self.cfg.map_cfg.grid_size) * float(self.cfg.map_cfg.resolution_m)
+        sensor_margin = float(self.cfg.map_cfg.sensor_radius_cells) * float(self.cfg.map_cfg.resolution_m)
+        return half_width + sensor_margin

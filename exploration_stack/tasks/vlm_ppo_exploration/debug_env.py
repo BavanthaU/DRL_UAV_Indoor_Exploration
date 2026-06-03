@@ -96,6 +96,9 @@ class DebugVlmPpoVectorEnv:
         self._prev_actions[ids] = 0.0
         self._curiosity.reset(ids)
         self._reveal(ids)
+        self._mapped_free_cells[ids] = (self._known_map[ids] == 1).flatten(start_dim=1).sum(dim=1).float()
+        self._prev_mapped_free_cells[ids] = self._mapped_free_cells[ids]
+        self._curiosity.prime(self._known_map, ids)
         return self._get_obs()
 
     def step(self, actions):

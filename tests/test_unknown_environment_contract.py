@@ -27,6 +27,42 @@ class UnknownEnvironmentContractTest(unittest.TestCase):
         self.assertEqual(tuple(reward.shape), (2,))
         self.assertEqual(tuple(done.shape), (2,))
 
+    def test_debug_env_does_not_reward_reset_visibility_as_progress(self):
+        from exploration_stack.tasks.vlm_ppo_exploration.debug_env import DebugVlmPpoEnvConfig, DebugVlmPpoVectorEnv
+
+        env = DebugVlmPpoVectorEnv(DebugVlmPpoEnvConfig(num_envs=2, max_steps=8, device="cpu"))
+        env.reset()
+        _, reward, _, info = env.step(torch.zeros(2, 3))
+        terms = info["reward_terms"]
+        self.assertTrue(torch.equal(terms["new_cells"], torch.zeros(2)))
+        self.assertTrue(torch.equal(terms["mapped_cell_delta"], torch.zeros(2)))
+        self.assertTrue((reward < 0.0).all())
+
+    def test_new_cell_curiosity_can_baseline_known_start_cells(self):
+        from exploration_stack.tasks.vlm_ppo_exploration.intrinsic_rewards import NewCellCountCuriosity
+
+        curiosity = NewCellCountCuriosity(1, (8, 8), device="cpu")
+        occupancy = torch.zeros(1, 8, 8, dtype=torch.long)
+        occupancy[:, 3:5, 3:5] = 1
+        curiosity.prime(occupancy)
+        reward, counts = curiosity.update(occupancy)
+        self.assertEqual(counts.item(), 0.0)
+        self.assertEqual(reward.item(), 0.0)
+        occupancy[:, 5, 5] = 1
+        reward, counts = curiosity.update(occupancy)
+        self.assertEqual(counts.item(), 1.0)
+        self.assertGreater(reward.item(), 0.0)
+
+    def test_depth_line_treats_no_hit_as_clear_range(self):
+        from exploration_stack.tasks.vlm_ppo_exploration.observations import depth_line_from_camera
+
+        depth = torch.full((1, 5, 9, 1), float("inf"))
+        depth_line = depth_line_from_camera(depth, width=9, max_depth_m=6.0)
+        self.assertTrue(torch.equal(depth_line, torch.ones_like(depth_line)))
+        depth[:, 2, 4, 0] = 0.24
+        depth_line = depth_line_from_camera(depth, width=9, max_depth_m=6.0)
+        self.assertLess(depth_line[0, 4].item(), 0.08)
+
     def test_reward_terms_use_frontier_closure_not_area_threshold(self):
         from exploration_stack.tasks.vlm_ppo_exploration.reward_terms import RewardWeights, compute_extrinsic_reward
 

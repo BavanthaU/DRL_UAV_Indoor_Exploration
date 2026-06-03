@@ -116,6 +116,17 @@ uses vectorized environment `0`, saves local files under `train_maps/`, and logs
 only the agent's internal map state. Change `wandb.train_map_env_id`,
 `wandb.train_map_interval`, or `wandb.log_train_maps` in the config if needed.
 
+## Training Diagnostics
+
+Use `reward/new_cells` and `reward/mapped_cell_delta` to check whether the agent
+is earning progress after the reset/start observation. The start patch is
+baselined and should not appear as exploration reward. If exploration stalls,
+check `reward/invalid_*`: angular-speed failures indicate controller instability,
+altitude failures indicate vertical control or action-distribution problems, and
+map-bound failures indicate the agent left the represented local map. Trainer
+CSV reward terms are rollout sums of per-step vectorized means, so divide by the
+rollout length when you want the approximate per-step value.
+
 ## Evaluation Map Upload
 
 Evaluation writes `eval_maps/best_explored_map.png` and uploads it to W&B as
