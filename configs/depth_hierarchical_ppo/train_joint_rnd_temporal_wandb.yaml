@@ -1,0 +1,40 @@
+run_name: train_joint_rnd_temporal_wandb
+device: cpu
+seed: 7
+mode: train_joint_alternating
+baseline:
+  task_id: Isaac-Depth-Hierarchical-PPO-UAV-Exploration-v0
+  use_vlm: false
+  use_convnext: false
+  use_il: false
+  use_sac: false
+  curiosity_type: rnd
+  local_use_new_cell_reward: false
+  local_use_rnd: true
+  high_level_use_map_rnd: true
+  astar_selects_candidate: false
+  learned_high_level_selector: true
+  active_mapping_during_transit: true
+  rnd_encoder: temporal_depth
+  map_rnd_encoder: cnn_candidate
+  wandb_log_replays: true
+environment:
+  backend: debug
+  num_envs: 2
+  max_steps: 64
+  map_size: 32
+ppo:
+  max_iterations: 1
+  num_envs: 2
+  learning_rate: 3.0e-4
+logging:
+  root: logs/depth_hierarchical_ppo
+wandb:
+  enabled: true
+  project: depth-hierarchical-rnd-uav
+  mode: offline
+  dry_run: false
+  log_replay_every_iterations: 20
+  max_replay_episodes_per_log: 2
+  replay_fps: 8
+  replay_resolution: 512

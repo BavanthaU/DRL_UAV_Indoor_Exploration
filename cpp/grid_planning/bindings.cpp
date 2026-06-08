@@ -13,5 +13,6 @@ PYBIND11_MODULE(grid_planning_ext, m) {
     m.def("update_coverage_bitset", &update_coverage_bitset);
     m.def("compute_coverage_ratio", &compute_coverage_ratio);
     m.def("connected_components", &connected_components);
+    m.def("raycast_unknown_gain", &raycast_unknown_gain);
+    m.def("candidate_feature_summary", &candidate_feature_summary);
 }
-

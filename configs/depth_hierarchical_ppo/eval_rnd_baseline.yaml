@@ -1,0 +1,28 @@
+run_name: eval_rnd_baseline
+device: cpu
+seed: 7
+mode: eval
+baseline:
+  task_id: Isaac-Depth-Hierarchical-PPO-UAV-Exploration-v0
+  use_vlm: false
+  use_convnext: false
+  use_il: false
+  use_sac: false
+  curiosity_type: rnd
+  local_use_new_cell_reward: false
+  local_use_rnd: true
+  high_level_use_map_rnd: true
+  astar_selects_candidate: false
+  learned_high_level_selector: true
+  active_mapping_during_transit: true
+  rnd_encoder: temporal_depth
+  map_rnd_encoder: cnn_candidate
+  wandb_log_replays: true
+environment:
+  backend: debug
+  num_envs: 2
+  max_steps: 50
+  map_size: 32
+wandb:
+  enabled: false
+  dry_run: true

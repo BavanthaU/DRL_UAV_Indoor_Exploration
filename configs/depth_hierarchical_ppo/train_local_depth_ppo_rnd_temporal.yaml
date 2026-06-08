@@ -1,0 +1,39 @@
+run_name: train_local_depth_ppo_rnd_temporal
+device: cpu
+seed: 7
+mode: train_local_only
+baseline:
+  task_id: Isaac-Depth-Hierarchical-PPO-UAV-Exploration-v0
+  use_vlm: false
+  use_convnext: false
+  use_il: false
+  use_sac: false
+  curiosity_type: rnd
+  local_use_new_cell_reward: false
+  local_use_rnd: true
+  high_level_use_map_rnd: false
+  astar_selects_candidate: false
+  learned_high_level_selector: true
+  active_mapping_during_transit: true
+  rnd_encoder: temporal_depth
+  map_rnd_encoder: cnn_candidate
+  wandb_log_replays: false
+environment:
+  backend: debug
+  num_envs: 2
+  max_steps: 64
+  map_size: 32
+ppo:
+  max_iterations: 1
+  num_envs: 2
+  learning_rate: 3.0e-4
+rnd:
+  feature_dim: 256
+  use_temporal_conv: true
+  use_gru: false
+  reward_clip: 1.0
+  rnd_lr: 1.0e-4
+  normalize_obs: true
+  normalize_reward: true
+  zero_on_collision: true
+  zero_if_min_depth_below: 0.30

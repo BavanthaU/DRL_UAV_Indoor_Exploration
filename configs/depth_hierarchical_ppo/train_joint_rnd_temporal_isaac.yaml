@@ -1,0 +1,91 @@
+run_name: train_joint_rnd_temporal_isaac
+device: cuda:0
+seed: 7
+mode: train_joint_alternating
+baseline:
+  task_id: Isaac-Depth-Hierarchical-PPO-UAV-Exploration-v0
+  use_vlm: false
+  use_convnext: false
+  use_il: false
+  use_sac: false
+  curiosity_type: rnd
+  local_use_new_cell_reward: false
+  local_use_rnd: true
+  high_level_use_map_rnd: true
+  astar_selects_candidate: false
+  learned_high_level_selector: true
+  active_mapping_during_transit: true
+  rnd_encoder: temporal_depth
+  map_rnd_encoder: cnn_candidate
+  wandb_log_replays: true
+environment:
+  backend: isaac
+  num_envs: 16
+  use_office_asset: true
+  office_usd_path: assets/environments/TrainEnvOffice1.usd
+  max_steps: 600
+  map:
+    grid_size: 64
+    crop_size: 32
+    resolution_m: 0.25
+    sensor_radius_cells: 3
+    depth_ray_count: 64
+    depth_min_range_m: 0.1
+    depth_max_range_m: 6.0
+    depth_horizontal_fov_rad: 1.84
+    stuck_steps: 80
+    frontier_closed_steps: 12
+    min_mapped_cells_for_completion: 64
+  action:
+    max_vx_mps: 1.0
+    max_vy_mps: 0.5
+    max_yaw_rate_radps: 1.0
+    target_altitude_m: 1.2
+    min_altitude_m: 0.6
+    max_altitude_m: 2.2
+  scene:
+    env_spacing: 40.0
+ppo:
+  max_iterations: 1000
+  rollout_length: 64
+  num_envs: 16
+  learning_rate: 3.0e-4
+  high_level_learning_rate: 3.0e-4
+  max_grad_norm: 1.0
+local_explorer:
+  history_steps: 8
+  max_vx_mps: 1.0
+  max_vy_mps: 0.5
+  max_yaw_rate_radps: 1.0
+  target_altitude_m: 1.2
+  safe_radius_m: 0.45
+  danger_radius_m: 0.30
+rnd:
+  feature_dim: 256
+  use_temporal_conv: true
+  use_gru: false
+  reward_clip: 1.0
+  rnd_lr: 1.0e-4
+  normalize_obs: true
+  normalize_reward: true
+  zero_on_collision: true
+  zero_if_min_depth_below: 0.30
+high_level:
+  max_candidates: 64
+  candidate_feature_dim: 24
+  expected_candidate_gain: 500
+map_rnd:
+  feature_dim: 256
+  rnd_lr: 1.0e-4
+  reward_clip: 1.0
+logging:
+  root: logs/depth_hierarchical_ppo
+wandb:
+  enabled: true
+  project: depth-hierarchical-rnd-uav
+  mode: offline
+  dry_run: false
+  log_replay_every_iterations: 20
+  max_replay_episodes_per_log: 2
+  replay_fps: 8
+  replay_resolution: 512
